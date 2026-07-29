@@ -11,6 +11,7 @@
 #include "src/GameServer/TgGame/TgPlayerActions/PossessPawn/PossessPawn.hpp"
 #include "src/GameServer/TgGame/TgPlayerActions/ReturnHomeArea/ReturnHomeArea.hpp"
 #include "src/GameServer/TgGame/TgPlayerActions/TopDown/TopDown.hpp"
+#include "src/GameServer/TgGame/TgPlayerActions/GotoPlayer/GotoPlayer.hpp"
 #include "src/GameServer/TgGame/TgPlayerActions/Coords/Coords.hpp"
 #include "src/GameServer/TgGame/TgPlayerActions/FullHeal/FullHeal.hpp"
 #include "src/GameServer/TgGame/TgPlayerActions/ToggleBrokenSuits/ToggleBrokenSuits.hpp"
@@ -682,6 +683,18 @@ void IpcClient::DrainInbound() {
                     lift_z = j["args"].value("lift_z", 0.0f);
                 }
                 TgPlayerActions::TopDownCmd::Execute(guid, lift_z);
+            } else if (action == "goto_player") {
+                std::string target_guid;
+                if (j.contains("args") && j["args"].is_object()) {
+                    target_guid = j["args"].value("target_session_guid", "");
+                }
+                if (target_guid.empty()) {
+                    Logger::Log("chat-command",
+                        "[ChatCmd][DLL] goto_player guid=%s: missing target_session_guid; dropping\n",
+                        guid.c_str());
+                    continue;
+                }
+                TgPlayerActions::GotoPlayerCmd::Execute(guid, target_guid);
             } else if (action == "return_home_area") {
                 TgPlayerActions::ReturnHomeAreaCmd::Execute(guid);
             } else if (action == "refresh_profile_ui") {

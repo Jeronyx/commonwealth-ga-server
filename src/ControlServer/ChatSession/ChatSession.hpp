@@ -128,6 +128,11 @@ private:
     // Replies privately to this session only via deliver().
     void HandleUnspectateCommand();
 
+    // -nextplayer/-prevplayer handling. Same no-permission-check reasoning
+    // as HandleUnspectateCommand — TcpSession::CycleSpectateTarget rejects
+    // non-spectating sessions itself. Replies privately via deliver().
+    void HandleCycleSpectateCommand(bool forward);
+
     // Single tear-down path. Idempotent via `closed_`. On entry, optionally
     // broadcasts a "<player> has left the chat" system message if the session
     // was handshaken, then clears the write queue, closes the socket, and

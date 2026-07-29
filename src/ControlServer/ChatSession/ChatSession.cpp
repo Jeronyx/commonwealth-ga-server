@@ -319,6 +319,8 @@ bool HasParsedCommandAction(const ChatCommand::ParseResult& parsed) {
         || parsed.possess
         || parsed.unpossess
         || parsed.unspectate
+        || parsed.next_player
+        || parsed.prev_player
         || parsed.coords
         || parsed.fullheal
         || parsed.class_counts
@@ -605,6 +607,12 @@ void ChatSession::handle_packet(const uint8_t* data, size_t length) {
                     parsed.announce->c_str());
             }
         }
+        if (parsed.recognized && parsed.next_player) {
+            HandleCycleSpectateCommand(true);
+        }
+        if (parsed.recognized && parsed.prev_player) {
+            HandleCycleSpectateCommand(false);
+        }
         if (parsed.recognized && parsed.reload_queues) {
             Logger::Log("chat-command",
                 "[ChatCmd] -reload-queues player='%s' guid=%s outcome=activated details=MatchmakingService::ReloadQueues\n",
@@ -691,6 +699,17 @@ void ChatSession::HandleUnspectateCommand() {
     deliver(BuildChatFrame(kSystemChannelId, message));
     Logger::Log("chat-command",
         "[ChatCmd] -unspectate player='%s' guid=%s outcome=%s details=%s\n",
+        player_name_.c_str(), session_guid_.c_str(),
+        dispatched ? "dispatched" : "rejected", message.c_str());
+}
+
+void ChatSession::HandleCycleSpectateCommand(bool forward) {
+    std::string message;
+    const bool dispatched = TcpSession::CycleSpectateTarget(session_guid_, forward, message);
+    deliver(BuildChatFrame(kSystemChannelId, message));
+    Logger::Log("chat-command",
+        "[ChatCmd] -%s player='%s' guid=%s outcome=%s details=%s\n",
+        forward ? "nextplayer" : "prevplayer",
         player_name_.c_str(), session_guid_.c_str(),
         dispatched ? "dispatched" : "rejected", message.c_str());
 }

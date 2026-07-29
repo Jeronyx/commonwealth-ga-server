@@ -97,6 +97,20 @@ public:
     static bool DeliverSpectateExit(const std::string& session_guid,
                                     std::string& message);
 
+    // -nextplayer / -prevplayer: move a spectating session's own camera to
+    // the next/previous real player in its currently-spectated instance's
+    // active roster (InstanceRegistry::GetActivePlayersForInstance --
+    // spectators are excluded from that roster by design, so this only ever
+    // cycles through real players). Wraps at both ends; repeated calls
+    // advance from the last target (see spectate_cycle_target_guid_).
+    // Rejects (returns false, message set) if the session isn't known or
+    // isn't currently spectating. Returns true with a "spectating <name>"
+    // style message once the goto_player PLAYER_ACTION has been dispatched
+    // (async, same as every other PLAYER_ACTION — success isn't confirmed
+    // back here, only that the instance was reachable).
+    static bool CycleSpectateTarget(const std::string& session_guid, bool forward,
+                                    std::string& message);
+
     // Admin dashboard move/team-change helper. Same-instance moves use the existing
     // in-instance change_team action; cross-instance moves reuse PLAYER_REGISTER +
     // GO_PLAY routing.
@@ -250,6 +264,13 @@ private:
     // never spectating, and lets exit_spectate() know this is a spectator
     // leaving (vs. a real player) so it never touches queue-continuation.
     bool is_spectating_ = false;
+
+    // Last target handed to -nextplayer/-prevplayer (see CycleSpectateTarget),
+    // empty until the first cycle call. Tracks position in
+    // InstanceRegistry::GetActivePlayersForInstance's roster ordering so
+    // repeated calls advance instead of re-picking the same player. Cleared
+    // on exit_spectate() so a fresh spectate session starts clean.
+    std::string spectate_cycle_target_guid_;
 
     // Row id in ga_user_sessions for this connection. 0 until set by the
     // GSC_USER_LOGIN handler; backfilled with logout_at when the socket
@@ -632,6 +653,14 @@ private:
     // rotation. A spectator never queued for anything, so they always go
     // straight home.
     void exit_spectate();
+
+    // -nextplayer/-prevplayer implementation. Resolves the active roster for
+    // assigned_instance_id_, advances spectate_cycle_target_guid_ by one slot
+    // (wrapping), and dispatches a "goto_player" PLAYER_ACTION carrying the
+    // new target's session_guid. message is filled with either a
+    // "spectating <name>" confirmation or a reason nothing happened (empty
+    // roster, dispatch failure).
+    void cycle_spectate_target(bool forward, std::string& message);
 
     void send_get_loot_table_items_by_id_filtered_response();
 

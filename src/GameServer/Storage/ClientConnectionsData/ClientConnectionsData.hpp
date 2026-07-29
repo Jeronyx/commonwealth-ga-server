@@ -12,6 +12,13 @@ struct ClientConnectionData {
 	char RemoteAddrString[32];
 	FString* RemoteAddrFString;
 	ATgPawn_Character* Pawn;
+	// Set at TgGame.PostLogin (see UObject__ProcessEvent.cpp) -- the only
+	// point NewPlayer (the connection's PlayerController) is available before
+	// a pawn may exist. Lets a PLAYER_ACTION resolve a session's controller
+	// even when there's no Pawn to walk through -- spectators never have one,
+	// but still need their own controller resolved to receive
+	// ClientSetLocation calls (see GotoPlayer.cpp / -nextplayer/-prevplayer).
+	ATgPlayerController* Controller = nullptr;
 	bool bClosed;
 	std::string SessionGuid;
 	PlayerInfo PlayerInfo;

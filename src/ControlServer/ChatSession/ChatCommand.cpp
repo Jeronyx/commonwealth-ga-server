@@ -334,6 +334,17 @@ ParseResult TryParseChatCommand(const std::string& message_text) {
         return out;
     }
 
+    if (cmd_name == "-nextplayer" || cmd_name == "-prevplayer") {
+        // No args — move the spectator's camera to the next/previous player.
+        out.recognized = true;
+        out.suppress_broadcast = true;
+        if (rest.empty()) {
+            if (cmd_name == "-nextplayer") out.next_player = true;
+            else out.prev_player = true;
+        }
+        return out;
+    }
+
     // Other "-" text — pass through to broadcast as ordinary chat.
     return out;
 }

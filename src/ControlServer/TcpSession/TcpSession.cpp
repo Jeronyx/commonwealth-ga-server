@@ -1334,6 +1334,7 @@ bool TcpSession::DeliverSpectateExit(const std::string& session_guid, std::strin
 
 void TcpSession::exit_spectate() {
     is_spectating_ = false;
+    spectate_cycle_target_guid_.clear();
 
     // Same PLAYER_CLOSE primitive as handle_socket_disconnect -- state flip +
     // engine reap of the NetConnection. NOT PLAYER_LEAVE: driving
@@ -1352,6 +1353,84 @@ void TcpSession::exit_spectate() {
 
     // Straight home -- no route_from_mission_instance, no queue-continuation.
     wait_for_home_map_then_register(120);
+}
+
+bool TcpSession::CycleSpectateTarget(const std::string& session_guid, bool forward,
+                                     std::string& message) {
+    std::shared_ptr<TcpSession> session;
+    {
+        std::lock_guard<std::mutex> lock(sessions_mutex_);
+        auto it = g_sessions_.find(session_guid);
+        if (it == g_sessions_.end()) {
+            message = "Your session was not found.";
+            return false;
+        }
+        session = it->second.lock();
+        if (!session) {
+            g_sessions_.erase(it);
+            message = "Your session was not found.";
+            return false;
+        }
+    }
+
+    if (!session->is_spectating_) {
+        message = "You're not currently spectating.";
+        return false;
+    }
+
+    session->cycle_spectate_target(forward, message);
+    return true;
+}
+
+void TcpSession::cycle_spectate_target(bool forward, std::string& message) {
+    auto roster = InstanceRegistry::GetActivePlayersForInstance(assigned_instance_id_);
+    if (roster.empty()) {
+        message = "No players to spectate in this instance yet.";
+        return;
+    }
+
+    int current_idx = -1;
+    for (size_t i = 0; i < roster.size(); ++i) {
+        if (roster[i].guid == spectate_cycle_target_guid_) {
+            current_idx = (int)i;
+            break;
+        }
+    }
+
+    int next_idx;
+    if (current_idx < 0) {
+        // First cycle call, or the last target left the instance -- start
+        // from whichever end makes "next"/"prev" both land on roster[0]
+        // first rather than skipping a player depending on direction.
+        next_idx = forward ? 0 : (int)roster.size() - 1;
+    } else {
+        const int n = (int)roster.size();
+        next_idx = ((current_idx + (forward ? 1 : -1)) % n + n) % n;
+    }
+
+    const auto& target = roster[next_idx];
+    spectate_cycle_target_guid_ = target.guid;
+
+    nlohmann::json payload;
+    payload["type"]         = IpcProtocol::MSG_PLAYER_ACTION;
+    payload["session_guid"] = session_guid_;
+    payload["action"]       = "goto_player";
+    payload["args"]         = { {"target_session_guid", target.guid} };
+    const bool sent = IpcServer::SendToInstance(assigned_instance_id_, payload.dump());
+
+    auto info = PlayerSessionStore::GetByGuid(target.guid);
+    const std::string name = info ? info->player_name : "unknown";
+    const char* team_name = target.task_force == 1 ? "attackers"
+                           : target.task_force == 2 ? "defenders" : "";
+
+    if (!sent) {
+        message = "Failed to reach the instance -- try again.";
+        Logger::Log("tcp", "[TcpSession] cycle_spectate_target: guid=%s instance=%lld send=0\n",
+            session_guid_.c_str(), (long long)assigned_instance_id_);
+        return;
+    }
+
+    message = "Spectating " + name + (team_name[0] ? (std::string(" (") + team_name + ")") : "") + "...";
 }
 
 void TcpSession::wait_for_home_map_then_register(int remaining_seconds) {

@@ -88,8 +88,9 @@ struct ParseResult {
     // True if the message was a /-prefixed slash command attempt that we own
     // (currently: "-changeteam", "-spawnfriend", "-spawnenemy", "-possess",
     // "-unpossess", "-topdown", "-reload-queues", "-spectate",
-    // "-unspectate", "-togglebrokensuits", "-toggleallsuits").
-    // False for ordinary chat and for slash commands we don't recognize.
+    // "-unspectate", "-togglebrokensuits", "-toggleallsuits", "-nextplayer",
+    // "-prevplayer"). False for ordinary chat and for slash commands we
+    // don't recognize.
     bool recognized = false;
 
     // True if the message must NOT be re-broadcast as ordinary chat.
@@ -113,6 +114,14 @@ struct ParseResult {
     // -spectate — see ChatSession::HandleUnspectateCommand /
     // TcpSession::DeliverSpectateExit.
     bool unspectate = false;
+
+    // -nextplayer / -prevplayer — move the spectator's own camera to the
+    // next/previous real player in the currently-spectated instance's
+    // roster. No args. Entirely control-server-side for the roster/cycling
+    // logic — see ChatSession::HandleCycleSpectateCommand /
+    // TcpSession::CycleSpectateTarget.
+    bool next_player = false;
+    bool prev_player = false;
 
     // -coords — report the player's current XYZ (map-prep tooling). No args.
     bool coords = false;

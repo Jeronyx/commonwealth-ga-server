@@ -1086,6 +1086,10 @@ void __fastcall UObject__ProcessEvent::Call(UObject* Object, void* edx, UFunctio
 					connectionIndex = (int32_t)((UNetConnection*)NewPlayer->Player);
 					isSpectator = GClientConnectionsData[connectionIndex].PlayerInfo.is_spectator;
 					tf = GClientConnectionsData[connectionIndex].PlayerInfo.task_force;
+					// Stable from here on regardless of Pawn presence -- lets a
+					// PLAYER_ACTION resolve a spectator's own controller with
+					// no Pawn to walk through (see ClientConnectionsData.hpp).
+					GClientConnectionsData[connectionIndex].Controller = (ATgPlayerController*)NewPlayer;
 				} else {
 					Logger::Log("spawn",
 						"TgGame.PostLogin intercept: NewPlayer->Player is null -- "

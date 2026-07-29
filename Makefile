@@ -156,6 +156,7 @@ SOURCE_FILES= \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/PossessPawn/PossessPawn.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/ReturnHomeArea/ReturnHomeArea.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/TopDown/TopDown.cpp \
+			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/GotoPlayer/GotoPlayer.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/Coords/Coords.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/FullHeal/FullHeal.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPlayerActions/ToggleBrokenSuits/ToggleBrokenSuits.cpp \
