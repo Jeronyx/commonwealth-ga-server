@@ -240,6 +240,8 @@
 #include "src/GameServer/TgGame/TgPawn_Character/VanityPetDestroyed/TgPawn_Character__VanityPetDestroyed.hpp"
 #include "src/GameServer/TgGame/TgPawn/AddProperty/TgPawn__AddProperty.hpp"
 #include "src/GameServer/TgGame/TgPawn/AddDamageInfo/TgPawn__AddDamageInfo.hpp"
+#include "src/GameServer/TgGame/TgPawn/TGPostRenderFor/TgPawn__TGPostRenderFor.hpp"
+#include "src/GameServer/TgGame/TgHUD_Game/DrawActorOverlays/TgHUD_Game__DrawActorOverlays.hpp"
 #include "src/GameServer/TgGame/TgPawn/ApplyBuff/TgPawn__ApplyBuff.hpp"
 #include "src/GameServer/TgGame/TgPawn/TrackBotHealing/TgPawn__TrackBotHealing.hpp"
 #include "src/GameServer/TgGame/TgPawn/TrackCompleteKillInfo/TgPawn__TrackCompleteKillInfo.hpp"
@@ -435,6 +437,17 @@ DWORD WINAPI ModuleThread(LPVOID) {
 	TgGame__TgFindPlayerStart::Install();
 	TgGame__SpawnPlayerCharacter::Install();
 	TgGame__SpawnBotPawn::Install();
+	// Nameplate investigation -- diagnostic-only, logs on the "nameplate"
+	// channel (control-server.json enabled_channels). Added to the main
+	// server build 2026-07-31 so the host's own local listen-server client
+	// window can be used to test spectating, after client-side injection
+	// (version.dll crashes, dinput8.dll never gets loaded by the player's
+	// separate Steam client) proved to be a dead end for this exe.
+	// VTableHookBase::Install() for these two moved into GameEngine__Init::Call()
+	// (see GameEngine__Init.cpp) -- confirmed via hook_calltree 2026-07-31 that
+	// StaticClass() returns null when called this early (DllMain attach, before
+	// LoadStartupPackages has even run), since TgGame.u/TgClient.u aren't loaded
+	// into GObjObjects yet at this point.
 	TgGame__LoadGameConfig::Install();
 	TgGame__InitGameRepInfo::Install();
 	TgGame_Arena__LoadGameConfig::Install();

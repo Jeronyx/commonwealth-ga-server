@@ -112,6 +112,7 @@ SOURCE_FILES= \
 			  $(SRC_DIR)/GameServer/TgGame/TgGame/SpawnPlayerCharacter/TgGame__SpawnPlayerCharacter__GiveJetpack.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgGame/SpawnPlayerCharacter/TgGame__SpawnPlayerCharacter__GiveAgonizer.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgGame/SpawnBotPawn/TgGame__SpawnBotPawn.cpp \
+			  $(SRC_DIR)/GameServer/TgGame/TgGame/SpawnSpectatorGhostPawn/SpawnSpectatorGhostPawn.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgGame/SpawnBotById/TgGame__SpawnBotById.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgGame/RegisterForWaveRevive/TgGame__RegisterForWaveRevive.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgGame/UnregisterForWaveRevive/TgGame__UnregisterForWaveRevive.cpp \
@@ -330,6 +331,8 @@ SOURCE_FILES= \
 			  $(SRC_DIR)/GameServer/TgGame/TgPawn_Character/SendMarshal/TgPawn_Character__SendMarshal.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPawn/AddProperty/TgPawn__AddProperty.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPawn/AddDamageInfo/TgPawn__AddDamageInfo.cpp \
+			  $(SRC_DIR)/GameServer/TgGame/TgPawn/TGPostRenderFor/TgPawn__TGPostRenderFor.cpp \
+			  $(SRC_DIR)/GameServer/TgGame/TgHUD_Game/DrawActorOverlays/TgHUD_Game__DrawActorOverlays.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPawn/ApplyBuff/TgPawn__ApplyBuff.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPawn/TrackBotHealing/TgPawn__TrackBotHealing.cpp \
 			  $(SRC_DIR)/GameServer/TgGame/TgPawn/TrackCompleteKillInfo/TgPawn__TrackCompleteKillInfo.cpp \
@@ -550,6 +553,12 @@ VERSION_CPP_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(VERSION_CPP_SRC))
 VERSION_OBJS := $(VERSION_CPP_OBJS) $(OBJ_DIR)/lib/sqlite3/sqlite3.o $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(VERSION_PROXY_SRC))
 VERSION_CLIENT_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/client/%.o,$(VERSION_CPP_CLIENT_SRC)) $(patsubst %.cpp,$(OBJ_DIR)/client/%.o,$(VERSION_PROXY_SRC))
 DINPUT8_OBJS := $(VERSION_OBJS) $(patsubst %.cpp,$(OBJ_DIR)/%.o,$(DINPUT8_PROXY_SRC))
+# Client-diagnostic hooks proxied as dinput8.dll instead of version.dll --
+# same hook objects as VERSION_CLIENT_OUT, just linked against
+# DInput8Proxy.cpp/dinput8.def. version.dll proxying appears to reliably
+# crash this exe on load (2026-07-31 investigation); dinput8.dll is the
+# mechanism already proven working for the server's own hook.
+DINPUT8_CLIENT_OBJS := $(patsubst %.cpp,$(OBJ_DIR)/client/%.o,$(VERSION_CPP_CLIENT_SRC)) $(patsubst %.cpp,$(OBJ_DIR)/client/%.o,$(DINPUT8_PROXY_SRC))
 
 ifeq ($(PRINT_VERSION_OBJS),1)
 $(info VERSION_CPP_SRC = $(VERSION_CPP_SRC))
@@ -561,6 +570,7 @@ DINPUT8_DEF=$(DATA_DIR)/dinput8.def
 VERSION_OUT=$(OUT_DIR)/version.dll
 DINPUT8_OUT=$(OUT_DIR)/dinput8.dll
 VERSION_CLIENT_OUT=$(OUT_CLIENT_DIR)/version.dll
+DINPUT8_CLIENT_OUT=$(OUT_CLIENT_DIR)/dinput8.dll
 
 obj/pch.hpp.gch: src/pch.hpp
 	i686-w64-mingw32-g++ -std=c++17 -D_WIN32_WINNT=0x0601 -I. -I./lib/detours -I./lib/asio-1.34.2/include -x c++-header src/pch.hpp -o obj/pch.hpp.gch
@@ -589,7 +599,7 @@ $(OBJ_DIR)/lib/sqlite3/sqlite3.o: lib/sqlite3/sqlite3.c
 	i686-w64-mingw32-gcc -O2 -I./lib/sqlite3 -c $< -o $@
 
 # Default target
-all: $(VERSION_OUT) $(DINPUT8_OUT) $(VERSION_CLIENT_OUT)
+all: $(VERSION_OUT) $(DINPUT8_OUT) $(VERSION_CLIENT_OUT) $(DINPUT8_CLIENT_OUT)
 
 # Build version.dll
 $(VERSION_OUT): $(VERSION_OBJS) $(VERSION_DEF)
@@ -604,22 +614,26 @@ $(VERSION_CLIENT_OUT): $(VERSION_CLIENT_OBJS) $(VERSION_DEF)
 	$(file >$@.rsp,$(VERSION_CLIENT_OBJS) $(VERSION_DEF))
 	$(CC) $(CFLAGS) -o $@ @$@.rsp $(LDFLAGS)
 
+$(DINPUT8_CLIENT_OUT): $(DINPUT8_CLIENT_OBJS) $(DINPUT8_DEF)
+	$(file >$@.rsp,$(DINPUT8_CLIENT_OBJS) $(DINPUT8_DEF))
+	$(CC) $(CFLAGS) -o $@ @$@.rsp $(LDFLAGS)
+
 # Pull in header-dependency rules emitted by -MMD.  Each .o has a sibling .d
 # file listing the headers its .cpp included; when a header's mtime is newer
 # than a .o, make knows to rebuild that .o.  `-include` (leading dash) is
 # silent if the .d doesn't exist yet (first build), so this is zero-cost.
-DEPS := $(VERSION_OBJS:.o=.d) $(VERSION_CLIENT_OBJS:.o=.d)
+DEPS := $(VERSION_OBJS:.o=.d) $(VERSION_CLIENT_OBJS:.o=.d) $(DINPUT8_CLIENT_OBJS:.o=.d)
 -include $(DEPS)
 
 # Clean
 clean:
-	rm -rf $(OBJ_DIR) $(OBJ_CLIENT_DIR) $(OUT_DIR) $(OUT_CLIENT_DIR) $(VERSION_OUT).rsp $(DINPUT8_OUT).rsp $(VERSION_CLIENT_OUT).rsp
+	rm -rf $(OBJ_DIR) $(OBJ_CLIENT_DIR) $(OUT_DIR) $(OUT_CLIENT_DIR) $(VERSION_OUT).rsp $(DINPUT8_OUT).rsp $(VERSION_CLIENT_OUT).rsp $(DINPUT8_CLIENT_OUT).rsp
 
 cleanserver:
 	rm -rf $(OBJ_DIR) $(OUT_DIR)/version.dll $(OUT_DIR)/dinput8.dll $(VERSION_OUT).rsp $(DINPUT8_OUT).rsp
 
 cleanclient:
-	rm -rf $(OBJ_CLIENT_DIR) $(OUT_CLIENT_DIR) $(VERSION_CLIENT_OUT).rsp
+	rm -rf $(OBJ_CLIENT_DIR) $(OUT_CLIENT_DIR) $(VERSION_CLIENT_OUT).rsp $(DINPUT8_CLIENT_OUT).rsp
 
 # ── Control Server ──────────────────────────────────────────────────────────
 CS_SRC_DIR=src/ControlServer

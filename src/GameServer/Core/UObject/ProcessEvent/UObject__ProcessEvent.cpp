@@ -14,6 +14,8 @@
 #include "src/GameServer/TgGame/_deployable_classify/DeployableClassify.hpp"
 #include "src/GameServer/Storage/ClientConnectionsData/ClientConnectionsData.hpp"
 #include "src/GameServer/Storage/ActiveSpectatorCount/ActiveSpectatorCount.hpp"
+#include "src/GameServer/Storage/PawnSessions/PawnSessions.hpp"
+#include "src/GameServer/TgGame/TgGame/SpawnSpectatorGhostPawn/SpawnSpectatorGhostPawn.hpp"
 #include "src/GameServer/Storage/TeamsData/TeamsData.hpp"
 #include "src/GameServer/GameModes/SuperAgent/SuperAgent.hpp"
 #include "src/Config/Config.hpp"
@@ -1137,6 +1139,33 @@ void __fastcall UObject__ProcessEvent::Call(UObject* Object, void* edx, UFunctio
 						"bOnlySpectator/bIsSpectator/bOutOfLives set, pawn spawn stays skipped, "
 						"activeSpectatorCount=%d\n",
 						connectionIndex, tf, GActiveSpectatorCount);
+
+					// Nameplate investigation (2026-07-31): tested pointing this
+					// spectator's own r_PawnOwner (replicated ATgPawn* on the PRI,
+					// normally set only at real pawn spawn -- see
+					// TgGame__SpawnPlayerCharacter.cpp:512) at an arbitrary
+					// already-spawned pawn, hypothesizing it drives the client's
+					// local HUD.m_PawnOwner (the field already implicated in
+					// nameplate suppression). Empirically refuted -- no nameplate
+					// appeared. Left commented rather than deleted per project
+					// convention; see conversation history for the reasoning.
+					// if (!GPawnSessions.empty()) {
+					// 	repInfo->r_PawnOwner = GPawnSessions.begin()->first;
+					// 	repInfo->bNetDirty = 1;
+					// 	repInfo->bForceNetUpdate = 1;
+					// }
+
+					// Nameplate investigation, take 2: give the spectator an
+					// invisible, non-colliding, unshootable possessed pawn instead
+					// of leaving Pawn null. Must run BEFORE CallOriginal below --
+					// ClientSetHUD/GenericPlayerInitialization (which spawns the
+					// client's TgHUD_Game) happens inside the native PostLogin body,
+					// same ordering a real player's Pawn-before-HUD spawn relies on.
+					// bOnlySpectator/bIsSpectator/bOutOfLives stay set above, so
+					// RestartPlayer's own spawn path still never runs for this
+					// connection -- this is a second, independent Pawn assignment,
+					// not a relaxation of the existing gate.
+					SpawnSpectatorGhostPawn::Execute((ATgGame*)Object, (ATgPlayerController*)NewPlayer);
 				}
 			}
 		}
@@ -1145,6 +1174,55 @@ void __fastcall UObject__ProcessEvent::Call(UObject* Object, void* edx, UFunctio
 	}
 
 	case DispatchTag::SpectateVisualState: {
+		// Nameplate investigation (2026-07-31), take 2: rewriting the incoming
+		// ServerSetViewTarget(None) request to the ghost pawn (take 1, below)
+		// got confirmed logged as applied, but the following ClientSetViewTarget
+		// STILL carried the PlayerController itself as the target -- so
+		// ServerSetViewTarget's own native body re-derives/overrides the target
+		// back to self internally whenever bOnlySpectator is true (a deliberate
+		// anti-spoof rule, not a null-fallback), ignoring what we pass in.
+		// Rewriting the request is a no-op; instead rewrite the OUTGOING
+		// ClientSetViewTarget RPC parameter directly -- that's the call that
+		// actually tells the client what to render its camera/HUD from, and
+		// ProcessEvent's RPC dispatch reads straight from Params, so mutating
+		// it here before CallOriginal changes what the client receives
+		// regardless of what the server's own ViewTarget field settles on.
+		if (Params && Function) {
+			const char* fnNameRaw = Function->GetFullName();
+			if (fnNameRaw && strcmp(fnNameRaw, "Function Engine.PlayerController.ClientSetViewTarget") == 0) {
+				ATgPlayerController* pc = (ATgPlayerController*)Object;
+				ATgRepInfo_Player* rep = (pc && pc->PlayerReplicationInfo)
+					? (ATgRepInfo_Player*)pc->PlayerReplicationInfo : nullptr;
+				AActor** paramActorSlot = (AActor**)Params;
+				// Scoped to spectators specifically -- only rewrite when the
+				// server is about to tell the client to view itself (self),
+				// leaving every other legitimate ClientSetViewTarget call
+				// (including the correct initial ghost-pawn assignment) alone.
+				if (pc && rep && rep->bIsSpectator && pc->Pawn
+					&& *paramActorSlot == (AActor*)pc) {
+					Logger::Log("spawn",
+						"SpectateVisualState: rewriting ClientSetViewTarget(self) -> ghost pawn=%p for pc=%p\n",
+						(void*)pc->Pawn, (void*)pc);
+					*paramActorSlot = (AActor*)pc->Pawn;
+				}
+			}
+			if (fnNameRaw && strcmp(fnNameRaw, "Function TgGame.TgPlayerController.ServerSetViewTarget") == 0) {
+				ATgPlayerController* pc = (ATgPlayerController*)Object;
+				ATgRepInfo_Player* rep = (pc && pc->PlayerReplicationInfo)
+					? (ATgRepInfo_Player*)pc->PlayerReplicationInfo : nullptr;
+				AActor** paramActorSlot = (AActor**)Params;
+				// Scoped to spectators specifically (bIsSpectator) -- real
+				// players never seem to hit this path in practice, but there's
+				// no reason to risk touching their ViewTarget requests too.
+				if (pc && rep && rep->bIsSpectator && !*paramActorSlot && pc->Pawn) {
+					Logger::Log("spawn",
+						"SpectateVisualState: redirecting ServerSetViewTarget(None) -> ghost pawn=%p for pc=%p\n",
+						(void*)pc->Pawn, (void*)pc);
+					*paramActorSlot = (AActor*)pc->Pawn;
+				}
+			}
+		}
+
 		if (Logger::IsChannelEnabled("spawn")) {
 			std::string fnName = Function->GetFullName();
 			std::string objName = Object->GetFullName();

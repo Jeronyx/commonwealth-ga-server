@@ -1,14 +1,21 @@
 #pragma once
 
 #include "src/pch.hpp"
-#include "src/Utils/HookBase.hpp"
+#include "src/Utils/VTableHookBase.hpp"
 
-// TgHUD_Game::DrawActorOverlays @ 0x113aa6f0 — the UC-level pawn iterator that
-// per-actor dispatches PostRenderFor (via FUN_10c6e5c0 exec wrapper). If this
-// doesn't fire, overhead rendering for ALL pawns is dead.
-class TgHUD_Game__DrawActorOverlays : public HookBase<
+// ATgHUD_Game::DrawActorOverlays — the pawn iterator that per-actor dispatches
+// TGPostRenderFor. If this doesn't fire, overhead rendering for ALL pawns is
+// dead.
+//
+// Only ever reached via virtual dispatch through vtable+0x49c (confirmed live
+// 2026-07-31 via a Ghidra debugger memory read of the CDO's vtable) — the UC
+// "exec" bytecode-unmarshal stub forwards here but decodes params from the
+// FFrame bytecode stream, not a viable hook point the way a normal native is.
+// Hooked via VTableHookBase against ATgHUD_Game's own vtable.
+class TgHUD_Game__DrawActorOverlays : public VTableHookBase<
 	void(__fastcall*)(void*, void*),
-	0x113aa6f0,
+	ATgHUD_Game,
+	0x49c,
 	TgHUD_Game__DrawActorOverlays> {
 public:
 	static void __fastcall Call(void* HUD, void* edx);

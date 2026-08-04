@@ -4,6 +4,8 @@
 #include "src/GameServer/Engine/LaunchEngineLoop/LoadStartupPackages/LoadStartupPackages.hpp"
 #include "src/GameServer/Utils/EngineLoad/EngineLoad.hpp"
 #include "src/GameServer/Replication/ReplicationDefaults/ReplicationDefaults.hpp"
+#include "src/GameServer/TgGame/TgPawn/TGPostRenderFor/TgPawn__TGPostRenderFor.hpp"
+#include "src/GameServer/TgGame/TgHUD_Game/DrawActorOverlays/TgHUD_Game__DrawActorOverlays.hpp"
 #include "src/Utils/Logger/Logger.hpp"
 
 void GameEngine__Init::FixGlobals() {
@@ -104,6 +106,16 @@ void GameEngine__Init::Call(void* GameEngine) {
 	// yet (CallOriginal below kicks off the engine init that ultimately
 	// spawns GameInfo / GRI / Pawns), so values land in time for every spawn.
 	ReplicationDefaults::Apply();
+
+	// VTableHookBase::Install() for these two must run here, not at DllMain
+	// attach time (dllmain.cpp) -- confirmed via hook_calltree 2026-07-31 that
+	// StaticClass() returned null when Install() ran that early: TgGame.u /
+	// TgClient.u aren't loaded into GObjObjects yet before LoadStartupPackages
+	// runs, so the CDO these hooks resolve through (StaticClass -> class+0x150
+	// -> vtable) doesn't exist yet either. By this point in Call(), same as
+	// ReplicationDefaults::Apply() above, the CDOs are guaranteed to exist.
+	TgPawn__TGPostRenderFor::Install();
+	TgHUD_Game__DrawActorOverlays::Install();
 
 	GameEngine__Init::CallOriginal(GameEngine);
 
