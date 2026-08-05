@@ -10,6 +10,9 @@ def pn(pid):
     r = q("SELECT name FROM asm_data_set_properties WHERE prop_id=?", (pid,))
     return (r[0]['name'] if r and r[0]['name'] else str(pid))
 CALC = {67: '+', 68: '+%', 69: '-%', 70: '-'}
+def vvname(vid):
+    r = q("SELECT text_msg_translated t FROM asm_data_set_valid_values WHERE value_id=?", (vid,))
+    return (r[0]['t'] if r and r[0]['t'] else '')
 TREE = {155: 'Balanced', 156: 'Healer', 157: 'Poison', 158: 'Tank', 159: 'Destroyer',
         160: 'Infiltration', 161: 'Marksman', 162: 'Engineer', 163: 'Drones'}
 CLASSTREES = {'Assault': [155, 158, 159], 'Medic': [155, 156, 157],
@@ -40,7 +43,7 @@ def effects_for(grp, sid):
     """Structured effects so the character sheet can aggregate them."""
     out = []
     for s in q("SELECT DISTINCT effect_group_id eg, effect_group_type_value_id t FROM asm_data_set_skill_effect_groups WHERE skill_group_id=? AND skill_id=?", (grp, sid)):
-        meta = q("SELECT required_skill_id rsk, situational_type_value_id sit, situational_value sv, lifetime_sec life, apply_interval_sec iv FROM asm_data_set_effect_groups WHERE effect_group_id=? LIMIT 1", (s['eg'],))
+        meta = q("SELECT required_skill_id rsk, situational_type_value_id sit, situational_value sv, lifetime_sec life, apply_interval_sec iv, required_category_value_id rc FROM asm_data_set_effect_groups WHERE effect_group_id=? LIMIT 1", (s['eg'],))
         m = meta[0] if meta else None
         for e in q("SELECT prop_id p, base_value bv, calc_method_value_id c, apply_on_interval_flag tick FROM asm_data_set_effects WHERE effect_group_id=?", (s['eg'],)):
             calc = e['c']
@@ -60,6 +63,18 @@ def effects_for(grp, sid):
                         # bare +80 Health it had nowhere to put, so the skill did nothing at all.
                         'iv': round(m['iv'], 2) if (m and m['iv']) else 0,
                         'tick': 1 if e['tick'] else 0,
+                        # What has to be true for this to fire. `sit` 1270/1271 are the target's
+                        # health gates (Killer Instinct above 75%, Group Heal Savior below 25%);
+                        # `rc` is the category that must already be on you for a reactive skill
+                        # (Aegis Armament wants a shield). Without these a conditional effect
+                        # reads as unconditional.
+                        'sit': (m['sit'] if m else 0) or 0,
+                        'sv': round(m['sv'], 1) if (m and m['sv']) else 0,
+                        'rc': (m['rc'] if m else 0) or 0,
+                        'rcn': vvname(m['rc']) if (m and m['rc']) else '',
+                        # Raw group type. TKIND collapses 264 and 759 into "on-hit", but they land
+                        # on opposite people: 759 is a self-buff, 264 lands on whoever you hit.
+                        'egt': s['t'],
                         'kind': TKIND.get(s['t'], 'passive'),
                         # rsk = the device-class this effect is gated to. Two effects on the same
                         # property but different rsk are DIFFERENT stats and must not be summed
