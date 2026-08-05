@@ -6,8 +6,9 @@
 #     group of that category is active -> devices that produce that category.
 #  3. effect_group_type: 261 passive-equip, 264 on-hit, 505 hit-situational (conditional), 759 successful-hit, 1104 reactive.
 #  4. Unscoped passives resolve by prop semantics (214 ranged dmg -> ranged devices, 350 pet -> pet devices, etc).
-import sqlite3, json
+import sqlite3, json, os
 OUT = r'C:/Users/patri/AppData/Local/Temp/claude/E--GA-LOCAL-Repo/4220e829-c0b4-416e-90e1-0bc04ececb41/scratchpad/'
+HERE = os.path.dirname(os.path.abspath(__file__))
 db = sqlite3.connect(r"E:\GA_LOCAL\gaa.db"); db.row_factory = sqlite3.Row
 def q(s, a=()): return db.execute(s, a).fetchall()
 # The game calls it Cooldown wherever the player sees it; the property table says Recharge
@@ -28,7 +29,7 @@ TREECLS = {155: 'All', 156: 'Medic', 157: 'Medic', 158: 'Assault', 159: 'Assault
 PROF = {680: 'Assault', 567: 'Medic', 681: 'Recon', 679: 'Robotics'}
 
 # ---------- 1. inventory devices + classification ----------
-inv = q("SELECT DISTINCT device_id, profile_id FROM ga_players_inventory WHERE user_id=2381 AND device_id>0")
+inv = q("SELECT DISTINCT device_id, profile_id, allowed_slots FROM ga_players_inventory WHERE user_id=2381 AND device_id>0")
 radius_props = [r['prop_id'] for r in q("SELECT prop_id FROM asm_data_set_properties WHERE name LIKE '%Effect Radius%' OR name='Radius'")]
 devices = {}
 for r in inv:
@@ -38,6 +39,10 @@ for r in inv:
     it = q("SELECT i.skill_id sk, m.message nm FROM asm_data_set_items i JOIN asm_data_set_msg_translations m ON m.msg_id=i.name_msg_id WHERE i.item_id=? LIMIT 1", (did,))
     name = it[0]['nm'] if it else ("dev%s" % did)
     dskill = it[0]['sk'] if it else 0
+    # Only the Crescent jetpack is equippable; the other jetpack variants sit in the inventory
+    # table but not in the live pool (same rule as gen2.py's device model).
+    if r['allowed_slots'] == '201' and 'Crescent' not in name:
+        continue
     modes = q("SELECT device_mode_id mid, attack_type_value_id atk, damage_type_value_id dmg, deployable_id dep, bot_id bot, device_projectile_id proj FROM asm_data_set_devices_data_set_device_modes WHERE device_id=?", (did,))
     atk = set(); pet = False; proj = False
     for m in modes:
@@ -48,15 +53,22 @@ for r in inv:
     # radius prop at all; its payload device (via device_projectile_id -> projectiles ->
     # spawn_deployable_id) has Effect Radius 20. Classifying on the carrier alone made every
     # Recon explosive read as non-AOE, so the AOE damage passive skipped all eight of them.
-    # Only the projectile chain is followed: a turret reached by bot_id is a separate
-    # combatant, not this device's payload.
+    # A station placed directly (mode deployable_id, no projectile) is likewise its own
+    # payload: the aura lives on the deployable's device (Medical Station's cat-1324 heal is
+    # on dev 2064). bot_id stays excluded - a turret is a separate combatant.
     payload = []
     for _m in q("SELECT device_projectile_id proj FROM asm_data_set_devices_data_set_device_modes WHERE device_id=? AND device_projectile_id>0", (did,)):
-        for _p in q("SELECT spawn_item_id si, spawn_deployable_id sd FROM asm_data_set_projectiles WHERE device_projectile_id=? LIMIT 1", (_m['proj'],)):
+        for _p in q("SELECT spawn_item_id si, spawn_deployable_id sd, spawn_bot_id sb FROM asm_data_set_projectiles WHERE device_projectile_id=? LIMIT 1", (_m['proj'],)):
+            if _p['sb']:
+                pet = True     # a projectile-spawned bot (Spider Grenades' spiders) is a pet,
+                continue       # not this device's payload - its damage takes Pet Damage (350)
             if _p['sd']:
                 for _r in q("SELECT device_id dv FROM asm_data_set_deployables WHERE deployable_id=? LIMIT 1", (_p['sd'],)):
                     if _r['dv']: payload.append(_r['dv'])
             if _p['si']: payload.append(_p['si'])
+    for _m in q("SELECT deployable_id dep FROM asm_data_set_devices_data_set_device_modes WHERE device_id=? AND deployable_id>0", (did,)):
+        for _r in q("SELECT device_id dv FROM asm_data_set_deployables WHERE deployable_id=? LIMIT 1", (_m['dep'],)):
+            if _r['dv']: payload.append(_r['dv'])
     hasradius = False
     if radius_props:
         ph = ",".join(str(p) for p in radius_props)
@@ -69,6 +81,32 @@ for r in inv:
     is_melee_dev = bool(atk & {170, 372})
     if is_melee_dev:
         hasradius = False
+    # Attack classes of the modes that actually HURT someone, carrier and payload alike -
+    # classified per MODE with the same rule the device model uses (gen2 hit_of): melee never
+    # promotes, a ranged mode with a prop-6 blast radius is AOE, else it stays ranged. Raw
+    # attack type alone must not decide - every AOE weapon also carries atk 85/177 (that is
+    # how it AIMS, not what it hits), which put MagmaLance under ranged damage. And a harmless
+    # spawn must not promote: the snipers' YA_AOE_AmmoCrate resupply has a 40 radius, which
+    # made the Ballista read as an AOE weapon.
+    dmgcls = set()
+    for _d in [did] + payload:
+        for _m in q("SELECT device_mode_id mid, attack_type_value_id a FROM asm_data_set_devices_data_set_device_modes WHERE device_id=?", (_d,)):
+            base = {85: 2, 177: 2, 170: 1, 372: 1}.get(_m['a'])
+            if not base:
+                continue
+            r6 = q("SELECT base_value bv FROM asm_data_set_device_mode_properties WHERE device_id=? AND device_mode_id=? AND prop_id=6", (_d, _m['mid']))
+            mcls = 3 if (base == 2 and r6 and r6[0]['bv'] > 0) else base
+            # "hurts" = deals actual damage (negative Health/Power, props 51/211) - the only
+            # props the bench's damage bucket (212/214/321) ever modifies. A protection debuff
+            # or a taunt takes Effect Potency (376) instead, so it must not put a device on a
+            # damage-skill list the skill cannot act on.
+            harm = False
+            for _eg in q("SELECT DISTINCT effect_group_id eg FROM asm_data_set_device_mode_effect_groups WHERE device_id=? AND device_mode_id=?", (_d, _m['mid'])):
+                for _e in q("SELECT prop_id p, calc_method_value_id c FROM asm_data_set_effects WHERE effect_group_id=?", (_eg['eg'],)):
+                    if _e['c'] in (69, 70) and _e['p'] in (51, 211):
+                        harm = True
+            if harm:
+                dmgcls.add(mcls)
     cats = set(); heals = False; dmg = False; debuff = False; timedfx = False
     # The payload's effect groups are this device's effects: a Venom Bomb deals no damage
     # itself, the mine it throws does. Scanning only the carrier left every Recon explosive
@@ -88,7 +126,8 @@ for r in inv:
                 else: dmg = True
             if e['p'] in (155, 156, 157, 217, 218, 219, 324, 316) and not pos: debuff = True
     devices[did] = {'name': name, 'skill': dskill, 'class': PROF.get(r['profile_id'], 'Shared'),
-                    'atk': sorted(atk), 'pet': pet, 'aoe': hasradius or (proj and 3 in atk), 'proj': proj,
+                    'atk': sorted(atk), 'pet': pet, 'aoe': 3 in dmgcls, 'proj': proj,
+                    'dmgcls': dmgcls, 'rad': hasradius,
                     'cats': sorted(cats), 'heals': heals, 'dmg': dmg, 'debuff': debuff, 'timedfx': timedfx,
                     # prop 4 Recharge Time: what "off-hand recharge" actually keys on. Weapons
                     # use refire (53) instead, so having a cooldown is what separates the two.
@@ -137,6 +176,55 @@ print("\n=== tree skills with effect groups: %d ===" % len(skills))
 
 # ---------- 3. resolve interactions ----------
 TKIND = {261: 'PASSIVE', 264: 'ON-HIT', 505: 'CONDITIONAL', 759: 'ON-HIT', 1104: 'REACTIVE'}
+
+# Ungated effects resolve by prop semantics: which devices does this property mean anything on?
+# The damage props key on dmgcls - the attack classes of the modes that actually hurt someone -
+# so an AOE weapon is not "ranged" just because it aims like one, and a sniper rifle is not
+# "AOE" because of a harmless spawn.
+SEMPRED = {
+    212: lambda v: 1 in v['dmgcls'],       # melee dmg
+    214: lambda v: 2 in v['dmgcls'],       # ranged dmg
+    215: lambda v: 2 in v['dmgcls'],
+    232: lambda v: 2 in v['dmgcls'],
+    321: lambda v: 3 in v['dmgcls'],       # AOE dmg
+    352: lambda v: 3 in v['dmgcls'],       # AOE radius
+    350: lambda v: v['pet'], 381: lambda v: v['pet'], 382: lambda v: v['pet'],
+    383: lambda v: v['pet'], 366: lambda v: v['pet'], 391: lambda v: v['pet'],
+    330: lambda v: v['heals'],
+    357: lambda v: v['skill'] in (365, 351, 363, 364),
+    337: lambda v: v['skill'] in (365, 351, 363, 364),
+    # These three modify a DEVICE, not the player, but had no rule - so the skills that
+    # carry them resolved to nothing at all. Offhand Recharge is the clearest case: a
+    # Balanced-tree skill reading "decreases the time it takes for off-hand devices to
+    # recharge" that reached zero devices.
+    203: lambda v: v['cooldown'], 4: lambda v: v['cooldown'],
+    208: lambda v: v['timedfx'],
+    # Spare Power's power-cost cut is the last of these: the resolver already applies
+    # prop 242 to a device's power, so the skill affects devices and should say so.
+    242: lambda v: v['power'], 322: lambda v: v['blockpower'],
+}
+
+# A gate names a weapon FAMILY, and a family is wider than the effect: Heal Durations is
+# gated to the heal families but only a heal that HAS a duration can have it extended.
+# These narrow a gated family to the devices the effect can act on at all.
+ACTPRED = {
+    208: lambda v: v['timedfx'],       # a lifetime modifier needs a timed effect
+    352: lambda v: v['rad'],           # a radius modifier needs a radius (Force Wall has none;
+                                       # a station's harmless aura still has one, so this is the
+                                       # raw prop-6 check, not the damaging-AOE class)
+    203: lambda v: v['cooldown'], 4: lambda v: v['cooldown'],
+    242: lambda v: v['power'], 322: lambda v: v['blockpower'],
+}
+
+# Decisions the data cannot express, reviewed against the game 2026-08-05
+# (docs/claude/theorycraft-console/skill-device-resolution.md):
+EXCLUDE = {
+    674: {'Pain Gun'},      # Bio Rifle Range tooltip: "excluding the Pain Gun"; the gate
+                            # (Medic Guns 405) includes it and no field expresses the carve-out
+    852: {'Triage Wave'},   # Group Heal Savior: measured on device-usage-metrics - a solo
+                            # Triage rescue applies eg22375 and never eg16587, while Healing
+                            # Wave and Healing Grenade both proc it
+}
 def fxsum(fx, maxn=3):
     out = []
     for f in fx[:maxn]:
@@ -156,48 +244,49 @@ for (grp, sid), S in sorted(skills.items()):
         how = ''
         scope = ''
         if G['rsk']:
-            targets = by_skill.get(G['rsk'], [])
             how = 'gated to %s' % sname(G['rsk']); scope = 'skill'
-            if not targets:
+            if not by_skill.get(G['rsk']):
                 unresolved.append((S['name'], eg, G['rsk'], sname(G['rsk']), detail))
                 continue
         elif G['rcat']:
-            targets = by_cat.get(G['rcat'], [])
             how = 'while a category-%s effect is active' % G['rcat']; scope = 'category'
             kind = 'REACTIVE'
-            if not targets:
+            if not by_cat.get(G['rcat']):
                 unresolved.append((S['name'], eg, 'cat%s' % G['rcat'], '', detail))
                 continue
         else:
-            # ungated: resolve by prop semantics + class compatibility
-            props = set(f[0] for f in G['fx'])
-            sem = []
-            if props & {212}: sem += [d for d, v in devices.items() if set(v['atk']) & {170, 372}]
-            if props & {214, 215, 232}: sem += [d for d, v in devices.items() if set(v['atk']) & {85, 177} and (v['dmg'] or v['debuff'])]
-            if props & {321, 352}: sem += [d for d, v in devices.items() if v['aoe'] and v['dmg']]
-            if props & {350, 381, 382, 383, 366}: sem += [d for d, v in devices.items() if v['pet']]
-            if props & {330}: sem += [d for d, v in devices.items() if v['heals']]
-            if props & {357, 337}: sem += [d for d, v in devices.items() if devices[d]['skill'] in (365, 351, 363, 364)]
-            # These three modify a DEVICE, not the player, but had no rule - so the skills that
-            # carry them resolved to nothing at all. Offhand Recharge is the clearest case: a
-            # Balanced-tree skill reading "decreases the time it takes for off-hand devices to
-            # recharge" that reached zero devices.
-            if props & {203, 4}: sem += [d for d, v in devices.items() if v['cooldown']]
-            if props & {391}: sem += [d for d, v in devices.items() if v['pet']]
-            if props & {208}: sem += [d for d, v in devices.items() if v['timedfx']]
-            # Spare Power's power-cost cut is the last of these: the resolver already applies
-            # prop 242 to a device's power, so the skill affects devices and should say so.
-            if props & {242}: sem += [d for d, v in devices.items() if v['power']]
-            if props & {322}: sem += [d for d, v in devices.items() if v['blockpower']]
-            if not sem:
-                continue  # self/defensive stat, no device link
-            targets = sorted(set(sem))
             how = 'applies to all matching devices'; scope = 'tree'
+        # Resolve per EFFECT, not per group: each effect reaches the devices it can act on,
+        # and the group's list is the union. Two narrowings apply on top of the base set:
+        #  - ACTPRED: the effect's property must mean something on the device.
+        #  - property_value_id: an effect carrying one is scoped to that effect CATEGORY and
+        #    may not touch any other (damage-pipeline.md 15.2) - Heavy Impact's potency is
+        #    pv875 Knockback, so of the Assault Guns it reaches only the guns that knock back.
+        devset = set()
+        for f in G['fx']:
+            p, pv = f[0], f[3]
+            if G['rsk']:
+                base = set(by_skill.get(G['rsk'], []))
+            elif G['rcat']:
+                base = set(by_cat.get(G['rcat'], []))
+            else:
+                pred = SEMPRED.get(p)
+                base = {d for d, v in devices.items() if pred(v)} if pred else set()
+            if (G['rsk'] or G['rcat']) and p in ACTPRED:
+                base = {d for d in base if ACTPRED[p](devices[d])}
+            if pv:
+                base = {d for d in base if pv in devices[d]['cats']}
+            devset |= base
+        if not devset:
+            continue  # self/defensive stat, no device link
+        targets = sorted(devset)
         if G['sit'] == 1271: gate = ' (target HP >%s%%)' % int(G['sv'])
         if G['sit'] == 1270: gate = ' (target HP <%s%%)' % int(G['sv'])
         for did in targets:
             # class compatibility: a class-tree skill can only affect that class's devices
             if S['cls'] != 'All' and devices[did]['class'] not in ('Shared', S['cls']):
+                continue
+            if devices[did]['name'] in EXCLUDE.get(sid, ()):
                 continue
             ix.setdefault(did, []).append({'skill': S['name'], 'sid': sid, 'tree': S['tree'], 'kind': kind,
                                            'detail': detail + gate, 'how': how, 'scope': scope,
@@ -255,7 +344,9 @@ for did, es in ix.items():
         entry = [devices[did]['name'], devices[did]['class']]   # keep class so the sheet can filter
         if entry not in d['devices']: d['devices'].append(entry)
 for d in skilldev.values(): d['devices'].sort()
-json.dump(skilldev, open(r"C:\Users\patri\AppData\Local\Temp\claude\E--GA-LOCAL-Repo\4220e829-c0b4-416e-90e1-0bc04ececb41\scratchpad\skilldev.json", 'w'))
+# Written next to the script (and committed), not to the scratchpad: this file feeds both the
+# console and the skill reference, and lived as an orphaned artifact once already.
+json.dump(skilldev, open(os.path.join(HERE, 'skilldev.json'), 'w'))
 print("skill->device map:", len(skilldev), "skills")
 
 print("\n=== SKILL -> DEVICE INTERACTION MAP (by class/tree) ===")

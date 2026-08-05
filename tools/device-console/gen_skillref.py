@@ -158,7 +158,6 @@ for _g, _ns in trees.items():
 # you hit"; the difference is entirely in what the skill is attached to.
 DEVTGT = {}
 DEVID = {}                      # device name -> id, so a name can find its icon
-DEVATK = {}                     # device name -> {attack types its modes use}
 DEVICON = {}                    # device id -> base64 png
 USED_ICONS = set()              # only emit CSS for icons actually referenced
 
@@ -182,13 +181,6 @@ try:
     for _d in _walk_devices(_inv):
         if _d.get('id'):
             DEVID[_d['name']] = str(_d['id'])
-        # attack type per device: 1 melee, 2 ranged, 3 AOE. A device's SLOT does not decide
-        # this - Techro Blaster is an AOE weapon in the Ranged slot, Inferno-X is ranged in the
-        # Specialty slot, Longbow is AOE in the same slot - so damage skills must match on this.
-        for _m in (_d.get('modes') or []):
-            a = ((_m.get('hit') or {}).get('atk'))
-            if a:
-                DEVATK.setdefault(_d['name'], set()).add(a)
         for _m in (_d.get('modes') or []):
             t = ((_m.get('hit') or {}).get('tgt'))
             if t:
@@ -207,32 +199,18 @@ SELF_EGT = {261, 759, 1104, 266, 283, 263}
 HIDE_DEV = {'HUMAN BASE ATTRIBUTES'}
 
 
-ATK_FOR_PROP = {212: 1, 214: 2, 321: 3}     # melee / ranged / AOE damage modifiers
-
-
 def devs_for(node, cls):
     """Devices this skill reaches, limited to ones the class can actually equip. The data gates
     by weapon family, which spans classes - Combat Off-Hand Utility reaches Concussion Grenade
     as well as the Medic offhands - but a Medic cannot carry an Assault grenade, so showing it
-    under Medic is misleading."""
-    src = node.get('dev') or []
-    # "tree"-scoped skills were resolved by a loose semantic guess, which put sniper rifles under
-    # AOE damage and grenades under ranged damage. When the skill is a plain damage modifier we
-    # can do better: match the device's real ATTACK TYPE.
-    wanted = {ATK_FOR_PROP[f['p']] for f in (node.get('fx') or []) if f.get('p') in ATK_FOR_PROP}
-    if node.get('scope') == 'tree' and wanted:
-        src = [d for d in src
-               if (d[0] if isinstance(d, list) else str(d)) not in DEVATK
-               or DEVATK.get(d[0] if isinstance(d, list) else str(d), set()) & wanted]
-
+    under Medic is misleading. Attack-type matching and the live-pool filter live in the
+    resolver (gen_ix.py), not here."""
     out, seen = [], set()
-    for d in src:
+    for d in (node.get('dev') or []):
         nm = d[0] if isinstance(d, list) else str(d)
         dc = d[1] if isinstance(d, list) and len(d) > 1 else ''
         if nm in HIDE_DEV or nm in seen:
             continue
-        if DEVID and nm not in DEVID:
-            continue        # not in the live device pool (e.g. the unused jetpack variants)
         if cls and dc and dc != cls:
             continue
         seen.add(nm)
@@ -259,8 +237,10 @@ def side_of(node, f, cls=None):
 NOTES = {
     742: ('display', 'Stored as Falling Damage 1.0 Decrease-% = <b>&minus;100%</b> (immune). '
                      'Renders as &minus;1.0% because the fraction-scaling rule only fires below 1.'),
-    674: ('data',    'Text excludes the Pain Gun, but the gate is Medic Guns (skill 405) and the '
-                     'Pain Gun carries skill 405. No field can express the exclusion, so we follow the data.'),
+    674: ('data',    'The gate is Medic Guns (skill 405) and the Pain Gun carries skill 405, but the '
+                     'text says &ldquo;excluding the Pain Gun&rdquo; &mdash; the resolver carves it out to match.'),
+    852: ('data',    'Triage Wave is carved out: measured on a solo Triage rescue, it applies its own '
+                     'effect group but never procs this one, while Healing Wave and Healing Grenade both do.'),
     902: ('fixed',   'Repeats on a 2s interval. The interval used to be dropped, so this skill '
                      'contributed nothing at all until 2026-08-05.'),
 }
@@ -287,10 +267,24 @@ def fx_html(node, cls=None):
     fx = node.get('fx') or []
     if not fx:
         return '<span class="none">no modelled effect</span>'
+    # Same property at the same value collapses to one line - but only when the gates are the
+    # same gate. Jetpack Power's four are "Assault Jetpack", "Medic Jetpack" and so on: one
+    # effect on your jetpack, described four times, so they merge. Death Medic's two +200%
+    # potency entries are Medic Guns and Area Poisons - different families, so they stay apart.
+    # Normalising away a leading class word is what separates the two cases.
+    CLASSWORDS = ('assault ', 'medic ', 'recon ', 'robotic ', 'robotics ')
+
+    def gate_key(g):
+        s = (g or '').lower()
+        for w in CLASSWORDS:
+            if s.startswith(w):
+                return s[len(w):]
+        return s
+
     groups = OrderedDict()
     for f in fx:
         key = (f.get('p'), f.get('v'), bool(f.get('pct')), bool(f.get('neg')),
-               f.get('kind'), f.get('iv') or 0)
+               f.get('kind'), f.get('iv') or 0, gate_key(f.get('rskn')))
         groups.setdefault(key, []).append(f)
 
     rows, trigs = [], []
@@ -302,11 +296,20 @@ def fx_html(node, cls=None):
         k = KIND_LABEL.get(f.get('kind'), '')
         if k:
             chips.append('<em class="k k-%s">%s</em>' % (f.get('kind'), k))
-        # Gate only when it distinguishes something. Collapsed groups share a value, so naming
-        # every scope adds noise without adding a number.
-        gates = [m.get('rskn') for m in members if m.get('rskn')]
-        if len(members) == 1 and gates:
-            chips.append('<em class="k k-gate">%s</em>' % html.escape(gates[0]))
+        # Show every gate the collapsed group actually spans. Dropping them entirely was wrong:
+        # Death Medic carries +200% potency TWICE, once gated to Medic Guns and once to Area
+        # Poisons, and merging them into one unlabelled line reads as a single buff when a medic
+        # can carry one weapon family without the other.
+        raw = []
+        for m in members:
+            g = m.get('rskn')
+            if g and g not in raw:
+                raw.append(g)
+        if raw:
+            # One gate per line by construction. Several raw names here means the same gate
+            # per class ("Assault Jetpack", "Medic Jetpack", ...), so show it once, unprefixed.
+            label = raw[0] if len(raw) == 1 else gate_key(raw[0]).title()
+            chips.append('<em class="k k-gate">%s</em>' % html.escape(label))
         side = side_of(node, f, cls)
         if side:
             chips.append('<em class="k k-side k-%s">%s</em>' % (side, side))

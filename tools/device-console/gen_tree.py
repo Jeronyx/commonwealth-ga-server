@@ -117,7 +117,7 @@ for ic in sorted(used_icons):
         missing.append(ic)
 
 skilldev = {}
-sdpath = r"C:\Users\patri\AppData\Local\Temp\claude\E--GA-LOCAL-Repo\4220e829-c0b4-416e-90e1-0bc04ececb41\scratchpad\skilldev.json"
+sdpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'skilldev.json')
 if os.path.exists(sdpath):
     skilldev = json.load(open(sdpath))
 for g, lst in nodes.items():
