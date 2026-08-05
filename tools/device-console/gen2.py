@@ -97,10 +97,15 @@ def merge_prots(chips):
         if key not in groups:
             groups[key] = []
             order.append((key, c))
-        groups[key].append(m.group(2))
+        # Keep the prop id alongside the axis name. The label collapses for display, but the
+        # payload used to keep only the FIRST prop, silently discarding the rest - so Sealed
+        # Systems granted Protection-Biological alone and its Disease/Stun/Ignite protections
+        # existed only in the label text. Anything simulating protection needs all of them.
+        groups[key].append((m.group(2), c[2][0] if len(c) > 2 and c[2] else None))
     for key, proto in order:
-        axes = groups[key]
+        pairs = groups[key]
         kind, pfx, val, tail = key[0], key[1], key[2], key[3]
+        axes = [a for a, _ in pairs]
         if len(axes) == 1:
             label = '%s%s Prot %s%s' % (pfx, axes[0], val, tail)
         elif len(axes) >= 5:
@@ -108,7 +113,15 @@ def merge_prots(chips):
         else:
             axes = sorted(axes, key=lambda a: PROTORD.index(a) if a in PROTORD else 99)
             label = '%s%s Prot %s%s' % (pfx, '/'.join(axes), val, tail)
-        out.append([kind, label] + list(proto[2:]))
+        pay = list(proto[2:])
+        props = [p for _, p in pairs if p]
+        if pay and len(props) > 1:
+            num = list(pay[0])
+            while len(num) < 11:
+                num.append(0)
+            num.append(props)           # index 11: every protection prop this chip stands for
+            pay[0] = num
+        out.append([kind, label] + pay)
     return out
 
 def dedup(lst):

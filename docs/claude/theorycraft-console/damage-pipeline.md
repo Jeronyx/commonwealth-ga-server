@@ -1514,3 +1514,123 @@ that decide a fight. Worth revisiting as its own panel if accuracy ever matters 
 Grenade refire and persist times looked missing but belong to the **spawned** explosion, which
 already renders as its own ON IMPACT row. Protection props flagged on turrets and drones are the
 S16 collapsing (`Mech: All Prot -40`) rather than omissions.
+
+## 31. Protection has a SECOND job — refusing effects, not just reducing damage
+
+Everything above treats protection as a damage multiplier. It is also the gate that decides
+whether an incoming effect **lands at all**, and the console does not currently model that half.
+
+`CalcProtection` returns a reduction fraction. On the damage path that fraction scales the damage
+(S8). On the **effect** path the same fraction is applied to the incoming effect group's
+**lifetime** — so at protection >= the attacker's attack rating the lifetime calcs to zero and the
+effect never applies. Not "applies for 0 seconds": never enters `s_AppliedEffectGroups` at all.
+
+The mechanism is already relied on elsewhere in the codebase — `SuperAgent.hpp`'s `stunImmune`
+works exactly this way, setting props 163 / 235 far above any device rating so "the stun's lifetime
+calcs to 0 and it never applies", and noting that the property's **max** must be raised too or
+`FClamp(m_fRaw, m_fMinimum, m_fMaximum)` caps the reduction at `max / rating`.
+
+So a category protection can produce two different outcomes depending on what is arriving:
+
+| Arriving | Protection's effect |
+|---|---|
+| damage carrying that category | damage x (1 - prot/rating), per S8 |
+| an effect group of that category | lifetime x (1 - prot/rating) -> at >= rating, refused outright |
+
+**Consequence for the simulator.** A device that grants a large category protection for a window
+currently does nothing in the sim except change damage numbers. Debuffs it should be *refusing*
+still land. See S32 for the worked case; the builder change is tracked separately.
+
+### The two poison protections — a naming trap
+
+The category axis map in S8 lists `303 -> 159`. That is the **status-category** poison protection.
+There is a second one on the damage-type axis, `897 -> 324`. Both are real, both are "poison", and
+the two sources in this repo label them in **opposite** directions:
+
+| Prop | Axis | Consulted by | `TgProperties.h` | `gaa.db` |
+|---|---|---|---|---|
+| **159** | status category (Poison, cat 303) | `CalcCategoryProtection` | `TGPID_PROTECTION_POISON` | "Protection - Biological" |
+| **324** | damage type (Poison, type 897) | `CalcDamageTypeProtection` | `TGPID_PROTECTION_BIO` | "Protection - Poison" |
+
+Whichever source you trust, the other looks like the bug. The engine only ever sees the id, so
+neither label is authoritative — but the axis assignment is settled by the S8 map plus how the data
+groups them: `HUMAN BASE ATTRIBUTES` (device 864) moves **155/156/157/324** as a quartet matching
+the four damage types exactly, while every device granting 159 pairs it with *categories* (Sealed
+Systems with Disease/Stun/Ignite; Scorpion Shell, Perfect Target and Super Shell with
+Ignite/Bleed). The Invulnerable Volume (eg 8698) raises **both in one group at different tiers** —
+155/156/157/324 and the attack types at 100, 159 and Ignite at 200.
+
+Harmless today: `TgPawn__InitializeDefaultProps` seeds both identically (raw 0, min 0, max 1000).
+Live the moment someone picks a constant by its name.
+
+### Not every category HAS a protection
+
+Ten status categories appear in the S8 map. **Category 986 "Additional Damage" is not among them**,
+and no `Protection - *` property exists for it — there are seventeen and none covers it. An
+Additional-Damage debuff can therefore be **cleansed but never refused**, by anything, ever. Same
+for any other category absent from that map.
+
+## 32. Worked interaction — Sealed Systems vs the Pain Gun
+
+The cleanest case for S31, because one device produces all three possible outcomes against another.
+
+**Pain Gun** (device 4676, "Pain Beam"): instant ranged, Physical, attack rating 100, range 65,
+**refire 0.25s**, 1.25 power/shot, Health -7 per hit (~28 dps). It applies three debuffs, all
+`Refresh`, all with lifetimes shorter than its own refire — so while the beam is held they are
+permanent:
+
+| eg | Category | Life | Effect |
+|---|---|---|---|
+| 16908 | **986 Additional Damage** | 0.5s | Additional Damage Taken **+30%** |
+| 16909 | **304 Slow** | 1.0s | GroundSpeed / AirSpeed **-30%** |
+| 26488 | **305 Disease** | 0.5s | Effect Heal Modifier (Self) **-5%** |
+
+**Sealed Systems** (device 3704): five `Remove Effect` groups — Stun, Poison, Ignite, Additional
+Damage, Disease — plus eg 10847, a **20s** buff setting Protection Biological(159) / Stun(163) /
+Ignite(266) / Disease(160) to **1000 each**. 1000 is exactly the ceiling
+`TgPawn__InitializeDefaultProps` seeds, so `FClamp` returns it intact; against rating 100 that is a
+10x reduction, clamped to total.
+
+**The three outcomes:**
+
+| Pain Gun debuff | Stripped? | Refused for 20s? | Net |
+|---|---|---|---|
+| Disease anti-heal | yes | **yes** — 305 -> prop 160, at 1000 | **gone for 20s** |
+| Additional Damage +30% | yes | **no** — 986 has no protection property at all | back in 0.25s |
+| Slow -30% | **no** — Sealed Systems has no Slow removal | **no** — it does not raise Protection-Slow (158) | untouched |
+
+So against a held beam, Sealed Systems is a strong answer to the Pain Gun's effect on **your
+healing**, and no answer to the Pain Gun itself. The +30% amplifier — the part that multiplies
+everyone else's damage on you — is precisely the part it can only clear, never block.
+
+**Cleansing pays only when it clears something.** Four of the five Remove Effect groups carry
+Health +300 alongside the strip, but the heal does **not** pay when nothing was removed (measured
+in game). Against a Pain Gun only two categories are present, so a cast returns **600, not 1200**.
+Mechanically this means an effect group whose Remove Effect finds nothing abandons its sibling
+effects too — the bool return of `RemoveEffectGroupsByCategory` is load-bearing, not just a
+success flag. The Stun group carries no health at all, so a stun-only clear heals zero.
+
+### What the console gets right and wrong here
+
+Right: the prop-140 strip (including DoT categories), the mitigation formula's category axis, and
+static baseline immunity for EMP Burn / Critical Failure.
+
+Wrong: nothing gates effect **application** on live protection, so the sim strips both debuffs and
+lets both return. That reproduces exactly the wrong answer this section corrects — it undervalues
+Sealed Systems by treating its 20s refusal as a 0.25s inconvenience.
+
+### Reading effect values — `base_value` carries no sign
+
+Every effect row stores a **positive** number; direction lives in `calc_method_value_id`
+(**67** Add / **68** Increase +% / **69** Decrease -% / **70** Subtract). Reading `base_value`
+alone turns debuffs into buffs. This produced two successive wrong readings of **Combat Off-Hand
+Utility** (eg 26474) elsewhere — first "a suspected authoring leftover", then "buffing the enemy
+you poison, design intent unexplained". It is calc **70** and **69**: Protection **-5**,
+GroundSpeed **-10%** — a debuff, exactly as its in-game tooltip states, and structurally identical
+to Killer Instinct at lower numbers on a different weapon family. The console's generators have
+always read the calc method correctly and render it as `-5.0`; only the prose was wrong.
+
+Related trap: `asm_data_set_skill_group_skills.desc_msg_translated` carries only the **first
+clause** of a skill's text. Combat Off-Hand Utility's stored description stops at "Increases the
+explosion radius of Combat Offhands" while the client tooltip continues into the debuff clause. A
+mismatch against the stored description proves nothing.

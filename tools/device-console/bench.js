@@ -323,6 +323,9 @@ window.GA = window.GA || {};
         // stacking rule for this effect's category (application_value_id / application_value)
         var app = num[6] || 0, appv = num[7] || 0;
         var sit = num[8] || 0, sv = num[9] || 0, iv = num[10] || 0;
+        // A collapsed protection chip ("Bio/Disease/Ignite/Stun Prot +1000") stands for several
+        // props at once; gen2 lists them all here so the sim can grant every one.
+        var alsoProps = (num[11] && num[11].length > 1) ? num[11] : null;
         // gen2 prefixes a backstab group's chips rather than encoding it numerically, because
         // the same situational slot carries the health gates. The label is the flag.
         var bs = /^Backstab: /.test(c[1]);
@@ -332,7 +335,7 @@ window.GA = window.GA || {};
         var r = apply(base, prop, isNeg, cat);
         var lr = life > 0 ? apply(life, prop === 354 ? 355 : 208, false, cat) : null;
         var self = /^Self: /.test(c[1]);
-        return { label: c[1], kind: c[0], prop: prop, cat: cat, egt: egt, self: self, neg: isNeg,
+        return { label: c[1], kind: c[0], prop: prop, alsoProps: alsoProps, cat: cat, egt: egt, self: self, neg: isNeg,
                  app: app, appv: appv, sit: sit, sv: sv, iv: iv, bs: bs, sign: isNeg ? -1 : 1,
                  base: Math.abs(base), value: r.value, mods: r.mods, isPct: isPct,
                  lower: GA.lowerIsBetter(prop, c[0], cat, self),

@@ -1707,9 +1707,14 @@
         if (c.self || onSelf) d.selfPower = (d.selfPower || []).concat([pw]);
         else d.powers.push(pw);
       } else if ((c.self || onSelf) && c.life > 0) {
-        var nm2 = GA.statName(c.prop);
-        if (nm2) d.selfTimed.push({ p: c.prop, name: nm2, v: c.sign < 0 ? -c.value : c.value,
-                                    pct: c.isPct, cat: c.cat, src: g.name, life: lifeOf(c) });
+        // A collapsed protection chip stands for several props at once - Sealed Systems'
+        // "Bio/Disease/Ignite/Stun Prot +1000" is four of them. Grant every one, or the sim
+        // holds only the first and the other three exist purely as label text.
+        (c.alsoProps || [c.prop]).forEach(function (pid) {
+          var nm2 = GA.statName(pid);
+          if (nm2) d.selfTimed.push({ p: pid, name: nm2, v: c.sign < 0 ? -c.value : c.value,
+                                      pct: c.isPct, cat: c.cat, src: g.name, life: lifeOf(c) });
+        });
       }
     });
     // How often it is sensible to use this thing.
@@ -1891,6 +1896,28 @@
       if ((GA.PROT_PROPS || []).indexOf(f.p) >= 0) p[f.p] = (p[f.p] || 0) + f.v;
     });
     return p;
+  }
+  // Protection has a second job besides reducing damage: CalcProtection's reduction is applied
+  // to an incoming effect group's LIFETIME, so at protection >= the attacker's rating the
+  // effect is refused outright rather than landing briefly. That is how Sealed Systems' 20s
+  // +1000 Disease protection stops a Pain Gun's anti-heal from ever applying again, and it is
+  // the same mechanism SuperAgent's stun immunity uses. See damage-pipeline.md S31/S32.
+  //
+  // Category -> protection property, from CalcCategoryProtection (damage-pipeline.md S8).
+  // A category absent from this map has NO protection anywhere in the game and can never be
+  // refused - notably 986 Additional Damage, which is why the Pain Gun's +30% amplifier can
+  // only ever be cleansed.
+  var CAT_PROT = { 303: 159, 304: 158, 305: 160, 378: 163, 431: 168,
+                   875: 233, 653: 235, 719: 266, 1016: 371, 921: 328 };
+  function effectLifeAfterProt(target, cat, life, rating) {
+    var prop = CAT_PROT[cat];
+    if (!prop || !(life > 0)) return life;
+    var r = rating || 100;
+    if (r < 1) return life;                       // nAttackRating < 1 returns early, no mitigation
+    var prot = Math.floor((protNow(target) || {})[prop] || 0);   // integer-floored, as CalcProtection
+    if (prot <= 0) return life;
+    var red = prot / r;
+    return red >= 1 ? 0 : life * (1 - red);
   }
   // A weapon's damage is resolved once, before the run starts, so a buff that lands mid-fight
   // (a Sensor Boost bought at 3s) would otherwise never reach it. Apply the live percentage
@@ -2244,10 +2271,17 @@
               v.dots = (v.dots || []);
               // Burns resolve through the same bucket rules as regens - see bucketVerdict.
               v.dots = (v.dots || []);
+              // Refused before any stacking decision - a burn the target is immune to never
+              // enters the bucket, so it cannot displace or refresh what is already there.
+              var dtLife = effectLifeAfterProt(v, dt.cat, dt.life, d.hit.rating);
+              if (!(dtLife > 0)) {
+                ev(t, v.id, d.name + ' burn refused by protection', 'strip', d.id);
+                return;
+              }
               var dv = bucketVerdict(v.dots, d.name, dt.cat, dt.app, dt.appv, dt.life);
               if (dv.how === 'drop') return;
               if (dv.how === 'refresh') {
-                dv.on.until = t + dt.life;
+                dv.on.until = t + dtLife;
                 dv.on.raw = dt.raw;
                 return;
               }
@@ -2255,8 +2289,8 @@
                 v.dots = v.dots.filter(function (x) { return x.cat !== dt.cat; });
               }
               v.dots.push({ src: d.name, devId: d.id, cat: dt.cat, raw: dt.raw,
-                            app: dt.app, appv: dt.appv, life: dt.life, at: t,
-                            iv: dt.iv, next: t + dt.iv, until: t + dt.life,
+                            app: dt.app, appv: dt.appv, life: dtLife, at: t,
+                            iv: dt.iv, next: t + dt.iv, until: t + dtLife,
                             hit: { cat: dt.cat, damageType: d.hit.dmg,
                                    attackType: d.hit.atk, rating: d.hit.rating } });
             });
@@ -2426,10 +2460,22 @@
               var hp0 = hpAtHit[tid];
               if (hp0 === undefined) hp0 = v.maxHP ? (v.hp / v.maxHP) * 100 : 100;
               if (!GA.situationalOk(f.sit, f.sv, hp0)) return;
+              // Category protection can refuse it outright before it ever lands (see S31).
+              // Only effects arriving from the other side are gated. A teammate cannot inflict
+              // a negative effect on you at all - no friendly fire, no friendly poison - so
+              // anything from your own team is support, and support is never protected against.
+              var fLife = f.life;
+              if (v.team !== a.team) {
+                fLife = effectLifeAfterProt(v, f.cat, f.life, d.hit && d.hit.rating);
+                if (!(fLife > 0)) {
+                  ev(t, v.id, f.name + ' refused by protection', 'strip', d.id);
+                  return;
+                }
+              }
               v.live = v.live.filter(function (x) { return !(x.src === f.src && x.p === f.p); });
               v.live.push({ p: f.p, name: f.name, v: f.v, pct: f.pct, cat: f.cat,
                             app: f.app || 0, appv: f.appv || 0, at: t,
-                            src: f.src, until: t + f.life, devId: d.id });
+                            src: f.src, until: t + fLife, devId: d.id });
             });
           });
         });
