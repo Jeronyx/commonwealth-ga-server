@@ -1665,7 +1665,14 @@
                          cat: c.cat });
       }
     });
-    var onSelf = (mm.hit && mm.hit.tgt === 'self');
+    // A SPAWN mode's "self" is the DEPLOYED thing, not the person who put it down. Force Wall's
+    // Force Field Device buffs itself +75 Physical and +1000 Bio/Ignite/Bleed/Disease - a
+    // structure shrugging off damage-over-time - and treating that as onSelf handed the whole
+    // lot to the carrier at runtime. equipBuffs already skips SPAWN modes for the same reason;
+    // this path did not, so it never showed on the character sheet but landed in the run.
+    // Harmless-looking while protection only scaled damage; once protection can REFUSE effects
+    // (S31) it made the carrier immune to poison, burns and heal-shred outright.
+    var onSelf = (mm.hit && mm.hit.tgt === 'self') && mm.kind !== 'SPAWN';
     // Backstab is far more than the power sap on the two maces: thirteen melee weapons carry
     // one, and between them they add flat damage, burns, slows, a healing-taken cut and a
     // protection shred. None of it was gated - some was being applied unconditionally, the

@@ -544,6 +544,12 @@ window.GA = window.GA || {};
         // only the active ones. Counting them here too would double them the moment the
         // device is switched on.
         if (/^Equip: /.test(c.label)) return;
+        // "Deployed:" is gen2's relabel of a SPAWN mode's Equip chips, and that rename walked
+        // straight through the guard above. These are the DEPLOYED thing's own stats - Force
+        // Wall's Force Field carries +75 Physical and +1000 Bio/Ignite/Bleed/Disease - so
+        // collecting them here handed the carrier a structure's immunity to damage-over-time.
+        // equipBuffs() skips SPAWN modes for exactly this reason; this path did not.
+        if (/^Deployed: /.test(c.label)) return;
         var selfScoped = c.self || SELF_PENALTY[c.cat];
         if (c.neg && !selfScoped) return;            // offensive - never lands on the owner
         var nm = GA.statName(c.prop);
