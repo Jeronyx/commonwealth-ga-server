@@ -40,9 +40,9 @@ def effects_for(grp, sid):
     """Structured effects so the character sheet can aggregate them."""
     out = []
     for s in q("SELECT DISTINCT effect_group_id eg, effect_group_type_value_id t FROM asm_data_set_skill_effect_groups WHERE skill_group_id=? AND skill_id=?", (grp, sid)):
-        meta = q("SELECT required_skill_id rsk, situational_type_value_id sit, situational_value sv, lifetime_sec life FROM asm_data_set_effect_groups WHERE effect_group_id=? LIMIT 1", (s['eg'],))
+        meta = q("SELECT required_skill_id rsk, situational_type_value_id sit, situational_value sv, lifetime_sec life, apply_interval_sec iv FROM asm_data_set_effect_groups WHERE effect_group_id=? LIMIT 1", (s['eg'],))
         m = meta[0] if meta else None
-        for e in q("SELECT prop_id p, base_value bv, calc_method_value_id c FROM asm_data_set_effects WHERE effect_group_id=?", (s['eg'],)):
+        for e in q("SELECT prop_id p, base_value bv, calc_method_value_id c, apply_on_interval_flag tick FROM asm_data_set_effects WHERE effect_group_id=?", (s['eg'],)):
             calc = e['c']
             rsk = (m['rsk'] if m else 0) or 0
             val = round(e['bv'], 3)
@@ -54,6 +54,12 @@ def effects_for(grp, sid):
                         'pct': 1 if calc in (68, 69) else 0,
                         'neg': 1 if calc in (69, 70) else 0,
                         'life': round(m['life'], 1) if (m and m['life']) else 0,
+                        # A skill effect can REPEAT rather than apply once. Fast Regeneration is
+                        # "80 HP every 2 seconds": lifetime 0, apply_interval_sec 2.0 and the
+                        # per-interval flag set. Dropping the interval here left the run with a
+                        # bare +80 Health it had nowhere to put, so the skill did nothing at all.
+                        'iv': round(m['iv'], 2) if (m and m['iv']) else 0,
+                        'tick': 1 if e['tick'] else 0,
                         'kind': TKIND.get(s['t'], 'passive'),
                         # rsk = the device-class this effect is gated to. Two effects on the same
                         # property but different rsk are DIFFERENT stats and must not be summed
@@ -61,7 +67,9 @@ def effects_for(grp, sid):
                         'rsk': rsk, 'rskn': skillname(rsk) if rsk else ''})
     seen = set(); ded = []
     for e in out:
-        k = (e['p'], e['v'], e['pct'], e['neg'], e['kind'], e['rsk'])
+        # iv is part of the identity: the same property at the same value is a different effect
+        # if one repeats on an interval and the other applies once.
+        k = (e['p'], e['v'], e['pct'], e['neg'], e['kind'], e['rsk'], e['iv'])
         if k in seen: continue
         seen.add(k); ded.append(e)
     return ded

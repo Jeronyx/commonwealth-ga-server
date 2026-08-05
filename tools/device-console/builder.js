@@ -1823,7 +1823,7 @@
       return { id: a.id, team: a.team, cls: a.cls, pid: a.pid, moraleCut: moraleCut,
                maxHP: dv.totHP, hp: dv.totHP, baseMaxHP: dv.totHP,
                maxPW: dv.totPW, pw: dv.totPW, baseMaxPW: dv.totPW, spentUntil: 0,
-               regen: baseRegen(col.stats),
+               regen: baseRegen(col.stats), hpRegen: baseHpRegen(col.picked),
                baseProt: GA.protectionFrom(col.stats),
                devs: devs, proj: proj, aim: a.aim, live: [], dead: false, spentThisStep: false,
                offhandReady: 0, sched: sched[a.id] || {} };
@@ -1840,6 +1840,26 @@
       if (x.p === 244 && !x.pct) r += x.total;
     });
     return r;
+  }
+  // Passive HEALTH regeneration from the skill tree. Fast Regeneration (Medic, skill 902) is
+  // "80 HP every 2 seconds" - lifetime 0, apply_interval_sec 2.0 - and it reached the run as a
+  // bare flat +80 with nowhere to go: baseRegen above is power only (prop 244), and a flat
+  // prop-51 from a skill never counts toward max HP either, because deriveTotals only sums
+  // sources whose layer is 'base'. So the skill contributed nothing whatsoever.
+  //
+  // Read off `picked` rather than the aggregated stats, because aggregation sums by property
+  // and throws the interval away. Applied in lumps on the interval, like the HoT path, rather
+  // than smoothed to a rate - 80 every 2s and 40 every 1s differ at a kill threshold.
+  function baseHpRegen(picked) {
+    var out = [];
+    (picked || []).forEach(function (e) {
+      ((e.n && e.n.fx) || []).forEach(function (f) {
+        if (f.p !== 51 || !f.iv || f.iv <= 0) return;
+        if (f.kind && f.kind !== 'passive') return;   // conditional/on-hit ones fire elsewhere
+        out.push({ amt: (f.neg ? -f.v : f.v), iv: f.iv, next: f.iv, src: e.n.name });
+      });
+    });
+    return out;
   }
 
   // protections right now = base plus whatever timed buffs are still live
@@ -2542,6 +2562,21 @@
           if (h.next > t) return;
           h.next += h.iv;
           a.hp = Math.min(a.maxHP, a.hp + h.raw * hm);
+        });
+      });
+
+      // Passive health regeneration from the tree, in lumps on its own interval. Unlike power
+      // regen this is not gated on having spent nothing - the data carries no such condition,
+      // it simply ticks.
+      S.actors.forEach(function (a) {
+        if (a.dead || !a.hpRegen || !a.hpRegen.length) return;
+        a.hpRegen.forEach(function (g) {
+          if (g.next > t) return;
+          g.next += g.iv;
+          if (a.hp >= a.maxHP) return;                 // no overheal, and nothing to report
+          var before = a.hp;
+          a.hp = Math.min(a.maxHP, a.hp + g.amt);
+          ev(t, a.id, g.src + ' regenerates ' + Math.round(a.hp - before), 'heal');
         });
       });
 
