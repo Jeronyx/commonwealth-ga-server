@@ -202,6 +202,9 @@ footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);color:v
  border:1px solid color-mix(in srgb,var(--acc) 40%,var(--line));border-radius:3px;padding:1px 4px;flex:none}
 .stval{font-family:ui-monospace,Consolas,monospace;font-size:12.5px;font-weight:700;font-variant-numeric:tabular-nums;flex:none}
 .stval.pos{color:var(--hp)} .stval.neg{color:var(--debuff)}
+/* benefit arrow inside a loadout chip: green up = helps the owner, red down = costs them */
+.chip .cb{font-style:normal;font-size:8px;margin-right:3px;vertical-align:1px}
+.chip .cb.up{color:var(--hp)} .chip .cb.dn{color:var(--debuff)}
 .stbody{padding:2px 9px 8px;border-top:1px dashed var(--line)}
 .srcline{display:grid;grid-template-columns:auto 1fr auto auto;gap:6px;align-items:center;padding:3px 0;font-size:11px}
 .srctree.basetag{color:var(--gear);border-color:color-mix(in srgb,var(--gear) 45%,var(--line))}

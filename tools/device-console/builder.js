@@ -792,7 +792,9 @@
   // effects are structured objects — render one as readable text
   function fxText(f) {
     var v = (f.neg ? '-' : '+') + f.v + (f.pct ? '%' : '');
+    // pv scope; prop 376 already carries it as its name (renamed in gen_tree)
     return f.n + ' ' + v
+      + (f.pvn && f.p !== 376 ? '  [' + f.pvn + ']' : '')
       + (f.rskn ? '  (' + f.rskn + ')' : '')
       + (f.life ? '  [' + f.life + 's]' : '')
       + (f.kind && f.kind !== 'passive' ? '  [' + f.kind + ']' : '');
@@ -901,14 +903,26 @@
     ['Utility', function () { return true; }]
   ];
   function esc(s) { return String(s).replace(/[&<>"]/g, function (c) { return ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]; }); }
-  // is this value good for the player? not the same question as "is it positive?"
-  function benefit(prop, v) {
-    if (!v) return 'pos';
-    var G = window.GA || {};
-    if ((G.ALWAYS_GOOD || {})[prop]) return 'pos';
-    if ((G.LOWER_BETTER || {})[prop]) return v < 0 ? 'pos' : 'neg';
-    return v < 0 ? 'neg' : 'pos';
+  // Is this value good for the player? Not the same question as "is it positive?" -
+  // polarity comes from benefit.py via window.__POLARITY__, the same table the reference
+  // page and the bench use. '' = unclassified: shown neutral here, flagged for review on
+  // the reference page.
+  function benefit(prop, v, pv) {
+    if (!v) return '';
+    var P = window.__POLARITY__ || {};
+    function has(a, x) { return (a || []).indexOf(x) >= 0; }
+    if (pv) {
+      if (has(P.catUnknown, pv)) return '';
+      if (has(P.catWantLess, pv)) return v < 0 ? 'pos' : 'neg';
+      return v < 0 ? 'neg' : 'pos';
+    }
+    if (has(P.unknownProps, prop)) return '';
+    if (has(P.lower, prop)) return v < 0 ? 'pos' : 'neg';
+    if (has(P.higher, prop)) return v < 0 ? 'neg' : 'pos';
+    return '';
   }
+  // the arrow IS the judgement; the sign inside the number stays the raw data
+  function benArrow(cls) { return cls === 'pos' ? '▲ ' : cls === 'neg' ? '▼ ' : ''; }
   function fmt(v) { v = Math.round(v * 100) / 100; return (v > 0 ? '+' : '') + v; }
 
   // The aggregation used to live inside renderSheet, which meant it could only ever describe
@@ -1009,9 +1023,15 @@
         // Key on the GATE too: the same property gated to different device classes is a
         // different stat and must not be summed (Shield Strength's +40% lifetime applies to
         // Shields; Point Tank's +30% applies to Boosts — they are never +70% on anything).
-        var key = f.p + '|' + f.pct + '|' + (f.rsk || 0);
+        // And on the category SCOPE (pv): Station Buff's +20% Station Damage and +20% Station
+        // Healing share prop 376 and a gate, but are two stats, never a +40%.
+        var key = f.p + '|' + f.pct + '|' + (f.rsk || 0) + '|' + (f.pv || 0);
         var st = stats[key] || (stats[key] = {
-          p: f.p, name: f.n, pct: f.pct, rsk: f.rsk || 0, scope: f.rskn || '', total: 0, srcs: []
+          p: f.p, name: f.n, pct: f.pct, rsk: f.rsk || 0, pv: f.pv || 0, total: 0, srcs: [],
+          // prop 376's name IS its scope (renamed in gen_tree); for the rest the scope
+          // label carries the pv category so same-named rows stay tellable-apart.
+          scope: (f.rskn || '') + (f.pvn && f.p !== 376
+                                   ? (f.rskn ? ' · ' : '') + f.pvn : '')
         });
         var v = f.neg ? -f.v : f.v;
         // Conditional / reactive / on-hit skill effects are NOT always-on, so they must not
@@ -3351,7 +3371,7 @@
         }
         // Colour by whether the number HELPS you, not by its sign: a cooldown or power-cost
         // reduction is a gain, and it was reading as a loss.
-        var cls = benefit(st.p, st.total);
+        var cls = benefit(st.p, st.total, st.pv);
         // only list devices the CURRENT class can actually equip
         var devs = {};
         st.srcs.forEach(function (s) {
@@ -3369,7 +3389,7 @@
         var badge = sh ? '<span class="shieldbadge">+' + Math.round(sh.pool) + ' shield</span>' : '';
         html += '<details class="statrow' + (sh ? ' shielded' : '') + '"><summary><span class="stname">'
           + esc(st.name) + scope + badge + '</span>'
-          + '<span class="stval ' + cls + '">' + val + '</span></summary><div class="stbody">';
+          + '<span class="stval ' + cls + '">' + benArrow(cls) + val + '</span></summary><div class="stbody">';
         if (sh) {
           html += '<div class="shieldline"><span class="srctree acttag">SHIELD</span>'
             + '<span class="srcskill">' + esc(sh.src) + '</span>'
@@ -3379,7 +3399,7 @@
             + 'the protection value above is what decides mitigation.</span></div>';
         }
         st.srcs.sort(function (a, b) { return Math.abs(b.val) - Math.abs(a.val); }).forEach(function (s) {
-          var scls = benefit(st.p, s.val);
+          var scls = benefit(st.p, s.val, st.pv);
           html += '<div class="srcline' + (s.base ? ' isbase' : '') + (s.armour ? ' isarm' : '')
             + (s.active ? ' isact' : '') + '"><span class="srctree' + (s.base ? ' basetag' : '')
             + (s.active ? ' acttag' : '') + '">' + esc(s.tree) + '</span>'
@@ -3388,7 +3408,7 @@
                 + s.kind + (s.dormant ? ' · not active' : '') + '</span>' : '')
             + (s.life ? '<span class="srckind">' + s.life + 's</span>' : '')
             + '<span class="srcval ' + (s.dormant ? 'off' : scls) + '">'
-            + fmt(s.val) + (st.pct ? '%' : '') + '</span></div>';
+            + (s.dormant ? '' : benArrow(scls)) + fmt(s.val) + (st.pct ? '%' : '') + '</span></div>';
         });
         if (devlist.length) {
           html += '<div class="devline"><span class="devlab">Affects</span><span class="devnames">'

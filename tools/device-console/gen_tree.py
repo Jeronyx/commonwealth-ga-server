@@ -1,5 +1,10 @@
 # Extract skill-tree structure (nodes, prereqs, grid layout, icons) for the builder
 import sqlite3, json, os, base64
+# Generated data lands in out/ next to the scripts (the repo-wide "out/" ignore covers it) -
+# never in a session scratchpad, which goes stale the moment the session ends.
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, 'out')
+os.makedirs(OUT, exist_ok=True)
 db = sqlite3.connect(r"E:\GA_LOCAL\gaa.db"); db.row_factory = sqlite3.Row
 def q(s, a=()): return db.execute(s, a).fetchall()
 # The game calls it Cooldown wherever the player sees it; the property table says Recharge
@@ -12,7 +17,8 @@ def pn(pid):
 CALC = {67: '+', 68: '+%', 69: '-%', 70: '-'}
 def vvname(vid):
     r = q("SELECT text_msg_translated t FROM asm_data_set_valid_values WHERE value_id=?", (vid,))
-    return (r[0]['t'] if r and r[0]['t'] else '')
+    # the table carries stray trailing spaces ("Proximity Damage Buff ")
+    return (r[0]['t'].strip() if r and r[0]['t'] else '')
 TREE = {155: 'Balanced', 156: 'Healer', 157: 'Poison', 158: 'Tank', 159: 'Destroyer',
         160: 'Infiltration', 161: 'Marksman', 162: 'Engineer', 163: 'Drones'}
 CLASSTREES = {'Assault': [155, 158, 159], 'Medic': [155, 156, 157],
@@ -45,15 +51,22 @@ def effects_for(grp, sid):
     for s in q("SELECT DISTINCT effect_group_id eg, effect_group_type_value_id t FROM asm_data_set_skill_effect_groups WHERE skill_group_id=? AND skill_id=?", (grp, sid)):
         meta = q("SELECT required_skill_id rsk, situational_type_value_id sit, situational_value sv, lifetime_sec life, apply_interval_sec iv, required_category_value_id rc FROM asm_data_set_effect_groups WHERE effect_group_id=? LIMIT 1", (s['eg'],))
         m = meta[0] if meta else None
-        for e in q("SELECT prop_id p, base_value bv, calc_method_value_id c, apply_on_interval_flag tick FROM asm_data_set_effects WHERE effect_group_id=?", (s['eg'],)):
+        for e in q("SELECT prop_id p, base_value bv, calc_method_value_id c, apply_on_interval_flag tick, property_value_id pv FROM asm_data_set_effects WHERE effect_group_id=?", (s['eg'],)):
             calc = e['c']
             rsk = (m['rsk'] if m else 0) or 0
+            pv = e['pv'] or 0
             val = round(e['bv'], 3)
             # Percentages are stored two ways: whole numbers (10.0 = 10%) and 0-1 fractions
             # (0.4 = 40%, e.g. Power Pool Increase, GroundSpeed slows). Normalise to whole %.
             if calc in (68, 69) and 0 < abs(val) < 1:
                 val = round(val * 100, 2)
-            out.append({'p': e['p'], 'n': pn(e['p']), 'v': val,
+            # property_value_id scopes the effect to one effect CATEGORY. The game names
+            # prop 376 by that scope, never as "potency": Death Medic's line reads "Disease"
+            # (pv 305), Super Destroyer's "Movement Penalty" (damage-pipeline.md §11).
+            # Renamed here, where names are produced, so every renderer agrees.
+            out.append({'p': e['p'], 'n': (vvname(pv) if (e['p'] == 376 and pv) else pn(e['p'])) or pn(e['p']),
+                        'v': val,
+                        'pv': pv, 'pvn': vvname(pv) if pv else '',
                         'pct': 1 if calc in (68, 69) else 0,
                         'neg': 1 if calc in (69, 70) else 0,
                         'life': round(m['life'], 1) if (m and m['life']) else 0,
@@ -82,9 +95,12 @@ def effects_for(grp, sid):
                         'rsk': rsk, 'rskn': skillname(rsk) if rsk else ''})
     seen = set(); ded = []
     for e in out:
-        # iv is part of the identity: the same property at the same value is a different effect
-        # if one repeats on an interval and the other applies once.
-        k = (e['p'], e['v'], e['pct'], e['neg'], e['kind'], e['rsk'], e['iv'])
+        # Identity is the WHOLE effect. Every summarised key eventually collapsed something
+        # real: dropping iv turned Fast Regeneration into nothing, dropping pv merged Station
+        # Buff's +20% Station Damage with its +20% Station Healing, and 'kind' folds egt 264
+        # and 759 into one "on-hit" though they land on opposite people. Only an exactly
+        # identical effect (a per-rank copy of the same group) is a duplicate.
+        k = tuple(sorted(e.items()))
         if k in seen: continue
         seen.add(k); ded.append(e)
     return ded
@@ -117,7 +133,7 @@ for ic in sorted(used_icons):
         missing.append(ic)
 
 skilldev = {}
-sdpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'skilldev.json')
+sdpath = os.path.join(HERE, 'skilldev.json')
 if os.path.exists(sdpath):
     skilldev = json.load(open(sdpath))
 for g, lst in nodes.items():
@@ -178,9 +194,10 @@ out = {'trees': {str(k): v for k, v in nodes.items()}, 'names': {str(k): v for k
        'armour': {'configs': armcfg, 'icon': armicon, 'slots': 7, 'default': 'RRRRRR'}}
 print("armour configs:", sorted(armcfg.keys()), "icon:", bool(armicon))
 print("base stats:", [(b['n'], b['v']) for b in base])
-json.dump(out, open(r"C:\Users\patri\AppData\Local\Temp\claude\E--GA-LOCAL-Repo\4220e829-c0b4-416e-90e1-0bc04ececb41\scratchpad\tree.json", 'w'))
+treepath = os.path.join(OUT, 'tree.json')
+json.dump(out, open(treepath, 'w'))
 print("trees:", {TREE[k]: len(v) for k, v in nodes.items()})
 print("icons embedded:", len(icons), "missing:", missing[:10], "(%d)" % len(missing))
 print("max ranks seen:", sorted({n['max'] for v in nodes.values() for n in v}))
 print("grid extents:", {TREE[k]: (max((n['x'] for n in v), default=0), max((n['y'] for n in v), default=0)) for k, v in nodes.items()})
-print("json bytes:", os.path.getsize(r"C:\Users\patri\AppData\Local\Temp\claude\E--GA-LOCAL-Repo\4220e829-c0b4-416e-90e1-0bc04ececb41\scratchpad\tree.json"))
+print("json bytes:", os.path.getsize(treepath))

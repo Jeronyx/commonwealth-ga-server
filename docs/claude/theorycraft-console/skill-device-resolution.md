@@ -129,23 +129,67 @@ labels. Checked against the in-game tooltip: Death Medic now renders all six of 
 the same gates the game lists, and Eagle Eye's two potency entries — same gate, different values
 — correctly stay separate.
 
-### Outstanding: render prop 376 by its scope
+### Prop 376 renders by its scope, and pv is part of effect identity (2026-08-05)
 
 The game never shows prop 376 as "potency". It names the **category the potency is scoped to**:
 Death Medic's reads **"Disease"** (its effects carry `property_value_id` 305), Super Destroyer's
-reads "Movement Penalty", Eagle Eye's is described as a weapon-debuff amp. `damage-pipeline.md`
-§11 already records this. The reference page still prints the raw property name, so a tooltip
-comparison reads as a mismatch when the data is right. `gen_tree.py` would need to carry
-`property_value_id` through to the effect for the page to label it the way the game does.
+reads "Movement Penalty" (`damage-pipeline.md` §11). Implemented at the point names are
+produced — `gen_tree.py` carries `pv`/`pvn` on every fx entry and names prop 376 by its scope,
+so the reference page, the character sheet and the tree tooltips all agree. Other pv-scoped
+props keep their name and show the scope as a chip: Eagle Eye's two +20% duration effects are
+"Effect Lifetime Modifier" scoped to General Debuff and to Additional Damage.
+
+Carrying pv exposed that it was **missing from every identity key**, and same-value effects at
+different scopes were collapsing into one:
+
+- Station Buff granted 2 of its 3 station buffs (+20% Station Damage swallowed +20% Station
+  Healing; +50% Station Protection survived on value)
+- Stim Boost's two +50% potencies (Personal Damage Buff / Stim Boost) read as one
+- Buff Enhancement's 3+2 scoped +40%s read as two
+- Eagle Eye's +30% General Debuff and +30% Additional Damage read as one
+
+`pv` is now in the dedup key in `gen_tree.py` (which keys on the whole effect, not a summary),
+the display-group key in `gen_skillref.py`, and the character-sheet aggregation key in
+`builder.js` — different scopes are separate lines and are never summed. The bench already
+scoped correctly (`fpv !== cat` in `GA.resolve`).
+
+### Benefit is the arrow, the sign is the data (2026-08-05)
+
+A minus is the calc method, not a judgement: −15% Power Pool Cost is a gain, −5 Protection on
+the enemy is a gain, −35% GroundSpeed on yourself is a cost. `tools/device-console/benefit.py`
+is the single source: benefit = (who it lands on) × (direction) × (stat polarity), with
+polarity split into OWNER_COST (cooldowns, power costs — yours even on an unprefixed chip),
+INFLICTION (knockback, CC, extra damage taken — the recipient wants less, so on an enemy more
+is a gain), and HIGHER_BETTER. Scoped potency/duration effects classify by their `pv`
+category: penalties on you (`Movement Penalty`, `Shield Movement Penalty`, `Stim Resistance`,
+`Regen Damage Penalty`) are wanted smaller, everything else bigger.
+
+Rendering: green ▲ = helps the build, red ▼ = costs it, the literal +/− stays. Every
+reference-page line carries a who-chip (you / allies / enemies). Unclassified stats render
+amber with a `polarity?` chip — currently only Threat (prop 421 / category 1601, benefit
+depends on whether the build wants aggro) — and a "bad on somebody else" reading (a skill
+apparently buffing enemies) demotes to the same flag instead of being asserted, since no
+skill does that on purpose. One genuine red exists: Escape Durations' +30% duration is
+scoped to Stim Resistance too, so it stretches the post-stim self-debuff along with the
+escape effects.
+
+The console reads the same tables via `window.__POLARITY__` (injected by `gen3.py`): card
+chips carry small ▲/▼ arrows (side = self prefixes / self effect-group types / owner-cost
+props, else the mode's target type), the character sheet arrows its totals and per-source
+values, and the bench seeds its owner-perspective `lower` flag from OWNER_COST.
 
 ## 5. Where this lives
 
+All generated data lives in `tools/device-console/out/` (covered by the repo-wide `out/`
+ignore); only `skilldev.json` is committed, beside the scripts. No generator reads from or
+writes to a session scratchpad any more.
+
 | file | role |
 |---|---|
-| `tools/device-console/gen_ix.py` | the resolver — emits `skilldev.json` (next to the script, committed), plus `ix.json` / `ixraw.json` / `devmeta.json` for the console |
+| `tools/device-console/gen_ix.py` | the resolver — emits `skilldev.json` (next to the script, committed), plus `out/ix.json` / `out/ixraw.json` / `out/devmeta.json` for the console |
 | `tools/device-console/skilldev.json` | generated skill → device map; regenerate, don't hand-edit |
-| `tools/device-console/gen_tree.py` | reads `skilldev.json` script-relative; emits `tree.json` |
-| `tools/device-console/gen_skillref.py` | builds the skill-reference page from `tree.json` |
+| `tools/device-console/gen_tree.py` | reads `skilldev.json` script-relative; emits `out/tree.json` |
+| `tools/device-console/gen_skillref.py` | builds `out/skill-reference.html` from `out/tree.json` |
 
 The reference page is published at
 `https://claude.ai/code/artifact/1ce7a67c-4e92-47e3-b437-9850316cbb50`.

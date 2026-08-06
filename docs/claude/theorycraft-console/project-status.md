@@ -53,22 +53,24 @@ name collision this avoids: prop 244 is *Power Pool Recharge Rate*, an entirely 
 thing (power regen), and it keeps its name. Likewise the skills literally called
 "Offhand Recharge" / "Assault Offhand Recharge" are names, not property labels.
 
-**Colour tracks benefit, not sign.** Green means the number helps you. Most properties are
-higher-is-better, but a set of them are the reverse, and rendering those by sign made every
-cooldown or power-cost reduction read as a loss:
+**Colour tracks benefit, not sign.** Green ▲ means the line helps the build owner, red ▼
+means it costs them, and the literal +/− stays the raw calc method. Benefit = (who it lands
+on) × (direction) × (stat polarity):
 
 | | properties |
 |---|---|
-| lower is better | 4 / 203 Cooldown · 53 Refire · 279 Deploy · 242, 322 Power Pool Cost · 349 Remote Activation Time · 357 Required Morale · 391 Pet Deploy Time · 137 Falling Damage · 421 Threat Modifier · 66 Effect GroundSpeed Modifier · 316 Additional Damage Taken |
-| good either way | 376 Effect Potency — only ever arrives from your own skills, scoped to something you want moved |
+| owner cost (yours even unprefixed; less is the gain) | 4 / 203 Cooldown · 53 Refire · 279 Deploy · 242, 322 Power Pool Cost · 349 Remote Activation Time · 357 Required Morale · 391 Pet Deploy Time · 137 Falling Damage · 66 Effect GroundSpeed Modifier |
+| infliction (recipient wants less, so on an enemy more is your gain) | 316 Additional Damage Taken · 60 Knockback / 295 Pushback · the CC props |
+| scoped by pv | 376 Effect Potency and 208 Effect Lifetime classify by their `property_value_id` category: penalties on you (Movement Penalty, Shield Movement Penalty, Stim Resistance, Regen Damage Penalty) are wanted smaller, everything else bigger |
+| unclassified — flagged, never guessed | 420/421 Threat and category 1601: benefit depends on whether the build *wants* aggro (Assault Melee III adds threat as a tank taunt; Decoy sheds it). Amber `polarity?` on the reference page |
 | everything else | higher is better |
 
-The last four lower-is-better entries are *modifiers on a penalty*: less falling damage, less
-of a shield's movement tax, less threat. Reducing them is the gain. Distinguish 421 Threat
-**Modifier** from 420 raw Threat — a decoy's `Threat +4000` is the device doing its job.
+Distinguish 421 Threat **Modifier** (a percentage on threat you generate — Decoy's −20%)
+from 420 raw Threat (a flat injection — Overcharge's +4000 per hit).
 
-The set lives once, in `GA.LOWER_BETTER` / `GA.ALWAYS_GOOD` (`bench.js`), read by both the
-device chips' before→after arrows and the My Player sheet's `benefit()`.
+The tables live once, in `tools/device-console/benefit.py`, injected as
+`window.__POLARITY__` (gen3) for the bench's before→after arrows, the My Player sheet's
+`benefit()`, and read directly by `gen_skillref.py` for the reference page's ▲/▼.
 
 ---
 

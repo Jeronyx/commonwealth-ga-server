@@ -7,6 +7,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8713", "--directory", "docs/claude/theorycraft-console"],
       "port": 8713
+    },
+    {
+      "name": "device-console-b",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["-m", "http.server", "8714", "--directory", "docs/claude/theorycraft-console"],
+      "port": 8714
     }
   ]
 }

@@ -1,12 +1,15 @@
-import os
 # Render inventory console v2 from inv_model.json
 import json, html, os, sys
+import benefit as BEN
 SEP = os.sep
-BASE = r"C:\Users\patri\AppData\Local\Temp\claude\E--GA-LOCAL-Repo\4220e829-c0b4-416e-90e1-0bc04ececb41\scratchpad"
-D = json.load(open(BASE + r"\inv_model.json"))
+# Committed sources (js/css) live next to this script; generated data lives in out/ beside it
+# (covered by the repo-wide "out/" ignore). Nothing is read from a session scratchpad.
+HERE = os.path.dirname(os.path.abspath(__file__))
+BASE = os.path.join(HERE, 'out')
+D = json.load(open(BASE + SEP + 'inv_model.json'))
 DEVIMG = open(BASE + SEP + 'deviceimg.json', encoding='utf-8').read()
 IMG = json.loads(DEVIMG)
-IXD = json.load(open(BASE + r"\ix.json"))
+IXD = json.load(open(BASE + SEP + 'ix.json'))
 model = D['model']; armor = D['armor']; base = D['base']
 ORDER = ['Assault', 'Medic', 'Recon', 'Robotics']
 ACC = {'Assault': 'assault', 'Medic': 'medic', 'Recon': 'recon', 'Robotics': 'robotics'}
@@ -52,7 +55,36 @@ def ix_rows(did):
             for e in bytree[tree])
         rows.append('<div class="ixtree"><span class="treelab">%s</span><div class="ixchips">%s</div></div>' % (esc(tree), chips))
     return '<div class="ixrow">%s</div>' % "".join(rows)
-def chiprow(chips):
+# Who a chip lands on, for the benefit arrow. Self prefixes and self effect-group types
+# override the mode's target; power costs (242/322) are always the carrier's own drain.
+SELF_EGTS = {261, 262, 263, 265, 266, 283, 759, 1104}
+SELF_PFX = ('Self: ', 'Deployed: ', 'Equip: ', 'Zoom: ')
+TGT_SIDE = {'friend': 'allies', 'self': 'you', 'enemy': 'enemies', 'enemyself': 'enemies', 'all': 'target'}
+def chip_arrow(c, tgt):
+    """Benefit arrow for a card chip - the same benefit.classify() the reference page and
+    the character sheet use. The arrow says whether the chip helps the DEVICE OWNER; the
+    sign in the text stays the raw calc method. No payload / bare device stats get none."""
+    if len(c) < 3 or not c[2] or not c[2][0]:
+        return ''
+    if c[0] in ('stat', 'hp'):
+        return ''
+    p, calc = c[2][0], c[2][2]
+    egt = c[2][4] if len(c[2]) > 4 else 0
+    t = c[1]
+    if t.startswith(SELF_PFX) or egt in SELF_EGTS or p in BEN.OWNER_COST:
+        side = 'you'
+    elif t.startswith(('Counter: ', 'Backstab: ')):
+        side = 'enemies'
+    else:
+        side = TGT_SIDE.get(tgt or 'enemy', 'enemies')
+    ben = BEN.classify(p, calc in (69, 70), 0, side)
+    return {'good': '<b class="cb up">&#9650;</b>', 'bad': '<b class="cb dn">&#9660;</b>'}.get(ben, '')
+def chiprow(chips, cap=12, tgt=None):
+    """Card display is capped HERE, not in the data: inv_model.json carries every chip
+    (the bench computes from them), the card just stops printing after `cap`."""
+    hidden = len(chips) - cap if len(chips) > cap else 0
+    if hidden:
+        chips = chips[:cap]
     out = []
     for c in chips:
         k, t = c[0], c[1]
@@ -71,6 +103,12 @@ def chiprow(chips):
             out.append('<span class="chip %s"><i class="who">zoom</i>%s</span>' % (cls, esc(t[6:])))
         else:
             out.append('<span class="chip %s">%s</span>' % (cls, esc(t)))
+        # the arrow goes just inside the chip, in front of any who-tag
+        ar = chip_arrow(c, tgt)
+        if ar:
+            out[-1] = out[-1].replace('">', '">' + ar, 1)
+    if hidden:
+        out.append('<span class="chip util" title="shown in the bench, not on the card">+%d more</span>' % hidden)
     return "".join(out)
 def pwchip(p):
     return '<span class="chip pw">%s pwr</span>' % (int(p) if p == int(p) else p) if p is not None else ''
@@ -87,7 +125,8 @@ def card(d):
         cls, lbl = MTAG.get(m.get('kind', 'PRI'), ('pri', 'PRIMARY'))
         nm = ('<span class="mname">%s</span>' % esc(m['name'])) if m.get('name') else ''
         rows.append('<div class="mrow"><span class="mtag %s">%s</span><div class="chips">%s%s%s</div></div>'
-                    % (cls, lbl, nm, chiprow(m['chips']), pwchip(m['power'])))
+                    % (cls, lbl, nm, chiprow(m['chips'], tgt=(m.get('hit') or {}).get('tgt')),
+                       pwchip(m['power'])))
     body = '<div class="modes">%s</div>' % "".join(rows)
     seen = set(); sigs = []
     for v in d['variants']:
@@ -129,11 +168,11 @@ legend = ''.join('<b><span class="sw" style="background:var(--%s)"></span>%s</b>
     [('heal', 'heal'), ('dmg', 'damage'), ('prot', 'protect'), ('debuff', 'debuff'), ('power', 'power')])
 klegend = ''.join('<b><span class="sw" style="background:var(--%s)"></span>%s</b>' % (v, k) for k, v in
     [('k-react', 'reactive'), ('k-cond', 'conditional'), ('k-amp', 'passive-scoped'), ('k-hit', 'on-hit'), ('k-glob', 'global')])
-STYLE = open(BASE + r"\style2.css", encoding="utf-8").read()
-SCRIPT = open(BASE + r"\app.js", encoding="utf-8").read()
-BUILDJS = open(BASE + r"\builder.js", encoding="utf-8").read()
-TREEJSON = open(BASE + r"\tree.json", encoding="utf-8").read()
-BENCHJS = open(BASE + SEP + 'bench.js', encoding='utf-8').read()
+STYLE = open(HERE + SEP + 'style2.css', encoding="utf-8").read()
+SCRIPT = open(HERE + SEP + 'app.js', encoding="utf-8").read()
+BUILDJS = open(HERE + SEP + 'builder.js', encoding="utf-8").read()
+TREEJSON = open(BASE + SEP + 'tree.json', encoding="utf-8").read()
+BENCHJS = open(HERE + SEP + 'bench.js', encoding='utf-8').read()
 DEVMETA = json.load(open(BASE + SEP + 'devmeta.json'))
 # `python gen3.py --public` builds the shareable copy: no accounts, no characters, no
 # inventories. The page is then a pure planner - you build everything yourself - which is what
@@ -239,6 +278,8 @@ HTML = HTML.replace('@@CRAFT@@', CRAFTBAR)
 HTML = HTML.replace('@@COMBAT@@', COMBATBAR)
 HTML = HTML.replace('</script>\n',
                     '</script>\n<script>window.__TREE__=' + TREEJSON + ';</script>\n'
+                    # stat polarity, single-sourced from benefit.py - bench/builder read this
+                    '<script>window.__POLARITY__=' + json.dumps(BEN.tables()) + ';</script>\n'
                     '<script>window.__DEVMODEL__=' + json.dumps(DEVMODEL) + ';</script>\n'
                     '<script>window.__DEVMETA__=' + json.dumps(DEVMETA) + ';</script>\n'
                     '<script>window.__DEVFX__=' + json.dumps(DEVFX) + ';</script>\n'

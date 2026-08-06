@@ -1,5 +1,8 @@
 # Inventory-driven device + modifier model for user 2381 (v2: modes, cure/strip, morale, jetpack filter, HBA base)
-import sqlite3, json
+import sqlite3, json, os
+# Generated data lands in out/ next to the scripts (the repo-wide "out/" ignore covers it).
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out')
+os.makedirs(OUT, exist_ok=True)
 db = sqlite3.connect(r"E:\GA_LOCAL\gaa.db"); db.row_factory = sqlite3.Row
 def q(s, a=()): return db.execute(s, a).fetchall()
 def iname(iid):
@@ -85,7 +88,9 @@ def merge_prots(chips):
     tooltip states once as "-40% protection". Collapse identical-value sets into one chip so
     the display matches the tooltip instead of repeating the same number five times."""
     import re
-    pat = re.compile(r'^((?:Mech: |Self: )?)([A-Za-z][\w-]*) Prot ([-+][\d.]+%?)(.*)$')
+    # "Deployed: " is a self-prefix too (a SPAWN mode's own chips), and without it a deployed
+    # mine's five identical-value protections rendered as five chips instead of one.
+    pat = re.compile(r'^((?:Mech: |Self: |Deployed: )?)([A-Za-z][\w-]*) Prot ([-+][\d.]+%?)(.*)$')
     groups = {}
     order = []
     out = []
@@ -124,14 +129,17 @@ def merge_prots(chips):
         out.append([kind, label] + pay)
     return out
 
+def _frz(x):
+    return tuple(_frz(y) for y in x) if isinstance(x, list) else x
 def dedup(lst):
     seen = set(); out = []
     for c in lst:
         num = c[2] if len(c) > 2 else None
-        egt = num[4] if num and len(num) > 4 else 0
-        # egt is part of the identity: an unconditional heal and a conditional one of the same
-        # size are different effects, not a duplicate.
-        t = (c[0], c[1], egt)
+        # Identity is the full numeric payload, not the rendered label: two effects can print
+        # identically while differing in interval, category or stacking rule, and the bench
+        # computes from the payload, so a label-keyed dedup silently dropped real effects.
+        # Chips with no payload fall back to (kind, label).
+        t = (c[0], c[1], _frz(num) if num else None)
         if t in seen: continue
         seen.add(t); out.append(list(c))
     return out
@@ -450,7 +458,10 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
                     elif not pos: lbl = 'Slow'
                     else: lbl = 'Speed'
                     add('debuff' if not pos else 'util', '%s %s%s%s%s' % (lbl, s, val, u, dur))
-                elif pn(p) in ('Knockback', 'Pushback'): add('debuff', 'Knockback' + dur)
+                elif pn(p) in ('Knockback', 'Pushback'):
+                    # 60 Knockback and 295 Pushback often ride the same group at different
+                    # magnitudes; with the value in the label they read as two effects, not a dupe.
+                    add('debuff', 'Knockback %g%s' % (round(bv, 1), dur))
             # The shield POOL lives on the effect group (asm_data_set_effect_groups.health),
             # not in its effects -- AOE Shield health=2000 is the tooltip's "or 2000 damage".
             # Scaled by 386 Effect Shield Modifier ("+12% Shield Health"). Categories 304 Slow
@@ -489,12 +500,15 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
             if 'los' in sensordet and int(sensordet.get('cfg', 0)) != 35:
                 bits.append('needs LOS' if sensordet['los'] else 'through walls')
             chips.insert(0, ['util', ' '.join(bits)])
+        # No caps here: chips are the bench's compute payload, and a display-sized cap
+        # ([:8] until 2026-08-05) silently dropped real effects from the simulation.
+        # The CARD is capped where it is rendered, in gen3's chiprow.
         chips = merge_prots(chips)
-        chips = dedup(chips)[:8]
-        for c in dedup(bschips)[:4]:
+        chips = dedup(chips)
+        for c in dedup(bschips):
             chips.append([c[0], 'Backstab: ' + c[1]] + c[2:])
         out.append({'name': mname, 'power': power, 'chips': chips,
-                    'zoom': dedup(zoomchips)[:4], 'blk': dedup(blkchips)[:4], 'mid': m['mid'],
+                    'zoom': dedup(zoomchips), 'blk': dedup(blkchips), 'mid': m['mid'],
                     'hit': hit_of(did, m)})
 
     # ---- Collapse to the game's TWO inputs: PRIMARY (LMB) + ALT (RMB) ----
@@ -536,7 +550,7 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
     if recurse:
         for sd, lab in spawned_sources(did):
             for sub in dev_modes(sd, False, recurse=False, is_spawn=True):
-                ch = dedup(sub['chips'])[:9]
+                ch = dedup(sub['chips'])
                 # An "Equip:" chip here is the SPAWNED thing's own passive, not the carrier's.
                 # A Venom Bomb's +100 AOE/Ranged/Melee protection is how tough the deployed
                 # mine is to shoot; labelled "Equip:" it read as though holding the bomb
@@ -597,7 +611,7 @@ for r in rows:
 base_attrs = {'equip': [['prot', 'Physical Prot +30'], ['prot', 'EMP-Stun Prot +1000'], ['prot', 'EMP-Burn Prot +1000']],
               'rest': [['heal', 'Rest: +10% missing HP/s'], ['debuff', 'Rest: -100 all Prot'], ['debuff', 'Rest: -50% Damage'], ['debuff', 'Rest: slow + -power']]}
 
-json.dump({'model': model, 'armor': armor, 'base': base_attrs}, open(r"C:\Users\patri\AppData\Local\Temp\claude\E--GA-LOCAL-Repo\4220e829-c0b4-416e-90e1-0bc04ececb41\scratchpad\inv_model.json", 'w'), indent=0)
+json.dump({'model': model, 'armor': armor, 'base': base_attrs}, open(os.path.join(OUT, 'inv_model.json'), 'w'), indent=0)
 for cls in ORDER:
     tot = sum(len(v) for v in model[cls].values())
     print(cls, tot, "devices;", {k: len(v) for k, v in model[cls].items()})

@@ -1,9 +1,14 @@
 # Builds a standalone skill reference: every skill, per tree, per class, with the in-game
 # text alongside the effects the console models. Written for checking one against the other.
-import io, json, html
+import io, json, html, os
 from collections import OrderedDict
+import benefit
 
-T = json.load(io.open('tree.json', encoding='utf-8'))
+# All generated data lives in out/ next to the scripts; running from any CWD works.
+HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, 'out')
+
+T = json.load(io.open(os.path.join(OUT, 'tree.json'), encoding='utf-8'))
 trees, names, classes, icons = T['trees'], T['names'], T['classes'], T['icons']
 
 CSS = """<style>
@@ -122,6 +127,9 @@ code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.9em}
 .k-iv{color:var(--up);border-color:color-mix(in srgb,var(--up) 45%,var(--line))}
 .k-allies{color:var(--ally);border-color:color-mix(in srgb,var(--ally) 45%,var(--line))}
 .k-enemies{color:var(--foe);border-color:color-mix(in srgb,var(--foe) 45%,var(--line))}
+.k-you{color:var(--dim)}
+.fx b.unk{color:var(--cond)}
+.k-flag{background:var(--cond);border-color:var(--cond);color:var(--panel);font-weight:700}
 .trig{margin:9px 0 0;font-size:12px;line-height:1.5;color:var(--mut);
   border-left:2px solid color-mix(in srgb,var(--cond) 55%,var(--line));padding-left:10px}
 .trig b{color:var(--ink);font-weight:600}
@@ -177,7 +185,7 @@ def _walk_devices(obj):
                 yield d
 
 try:
-    _inv = json.load(io.open('inv_model.json', encoding='utf-8'))
+    _inv = json.load(io.open(os.path.join(OUT, 'inv_model.json'), encoding='utf-8'))
     for _d in _walk_devices(_inv):
         if _d.get('id'):
             DEVID[_d['name']] = str(_d['id'])
@@ -186,7 +194,7 @@ try:
             if t:
                 DEVTGT.setdefault(_d['name'], set()).add(t)
     print('device targets resolved: %d devices' % len(DEVTGT))
-    DEVICON.update(json.load(io.open('deviceimg.json', encoding='utf-8')))
+    DEVICON.update(json.load(io.open(os.path.join(OUT, 'deviceimg.json'), encoding='utf-8')))
     print('device icons available: %d' % len(DEVICON))
 except Exception as _e:
     print('note: inv_model.json unavailable (%s) - side labels degrade to "target"' % _e)
@@ -218,21 +226,33 @@ def devs_for(node, cls):
     return out
 
 
+DEVBYSKILL = T.get('devbyskill') or {}
+
+
 def side_of(node, f, cls=None):
-    """self / allies / enemies, or '' when it is the obvious default."""
+    """you / allies / enemies / target - every line says who it lands on."""
     egt = f.get('egt') or 0
     if egt in SELF_EGT:
-        return ''            # passives and self-buffs are the default; labelling them is noise
+        return 'you'
+    # A gated effect rides exactly its gate's devices, so who it lands on comes from those -
+    # Super Engineer's +5 protection is gated to Repair (friend-only arms) and must not
+    # inherit the enemy-targeting turrets from the rest of the skill's device list.
+    rsk = f.get('rsk') or 0
+    if rsk and str(rsk) in DEVBYSKILL:
+        names = [d[0] for d in DEVBYSKILL[str(rsk)]]
+    else:
+        names = [nm for nm, _dc in devs_for(node, cls)]
     tg = set()
-    for nm, _dc in devs_for(node, cls):
+    for nm in names:
         tg |= DEVTGT.get(nm, set())
-    if tg and tg <= {'friend'}:
+    # 'all' can hit enemies; a friend/self-only device set is firmly ally-side (the repair
+    # arms carry {friend, self} and were falling through to the ambiguous bucket).
+    HOSTILE = {'enemy', 'enemyself', 'all'}
+    if tg and not (tg & HOSTILE):
         return 'allies'
-    if tg and tg <= {'enemy', 'enemyself'}:
+    if tg and not (tg & {'friend', 'self'}):
         return 'enemies'
-    if tg and 'friend' in tg:
-        return 'target'
-    return 'enemies' if tg else 'target'
+    return 'target'
 
 NOTES = {
     742: ('display', 'Stored as Falling Damage 1.0 Decrease-% = <b>&minus;100%</b> (immune). '
@@ -283,8 +303,11 @@ def fx_html(node, cls=None):
 
     groups = OrderedDict()
     for f in fx:
+        # pv is part of the identity: an effect scoped to a category (potency, durations) is a
+        # different stat per scope even at the same value - Station Buff's +20% Station Damage
+        # and +20% Station Healing are two facts, not a duplicate.
         key = (f.get('p'), f.get('v'), bool(f.get('pct')), bool(f.get('neg')),
-               f.get('kind'), f.get('iv') or 0, gate_key(f.get('rskn')))
+               f.get('kind'), f.get('iv') or 0, gate_key(f.get('rskn')), f.get('pv') or 0)
         groups.setdefault(key, []).append(f)
 
     rows, trigs = [], []
@@ -310,15 +333,35 @@ def fx_html(node, cls=None):
             # per class ("Assault Jetpack", "Medic Jetpack", ...), so show it once, unprefixed.
             label = raw[0] if len(raw) == 1 else gate_key(raw[0]).title()
             chips.append('<em class="k k-gate">%s</em>' % html.escape(label))
+        # A pv-scoped effect only touches that effect category. Prop 376 already carries the
+        # scope as its NAME (the game never says "potency"); for the rest (duration modifiers)
+        # the scope is a chip, which is also what tells apart Eagle Eye's two +30% duration
+        # lines (Additional Damage vs General Debuff).
+        if f.get('pvn') and f.get('p') != 376:
+            chips.append('<em class="k k-scope">%s</em>' % html.escape(f['pvn']))
         side = side_of(node, f, cls)
-        if side:
-            chips.append('<em class="k k-side k-%s">%s</em>' % (side, side))
+        chips.append('<em class="k k-side k-%s">%s</em>' % (side, side))
         if f.get('iv'):
             chips.append('<em class="k k-iv">every %gs</em>' % f['iv'])
         if f.get('life'):
             chips.append('<em class="k k-life">%gs</em>' % f['life'])
-        rows.append('<li><b class="%s">%s</b> <span class="pn">%s</span>%s</li>'
-                    % ('dn' if neg else 'up', num, html.escape(f.get('n', '?')),
+        # The arrow is the BENEFIT, the sign is the raw calc method - they disagree on
+        # purpose: "-100% Movement Penalty" is a gain (green up-arrow, literal minus), and a
+        # protection shred on the enemy is a gain too. '' = unclassified: rendered loud and
+        # amber so it gets investigated rather than guessed at.
+        ben = benefit.classify(f.get('p'), bool(neg), f.get('pv') or 0, side)
+        # "bad" on somebody ELSE means the line reads as buffing enemies or debuffing allies.
+        # No skill does that on purpose - it is a side-reading anomaly (Stealth Protection's
+        # +1 on-hit protection stores as a lands-on-target group) - so it is flagged for
+        # investigation rather than asserted. Genuine red is reserved for self-costs.
+        if ben == 'bad' and side != 'you':
+            ben = ''
+        if not ben:
+            chips.append('<em class="k k-flag">polarity?</em>')
+        arrow = {'good': '&#9650;&#8202;', 'bad': '&#9660;&#8202;'}.get(ben, '')
+        rows.append('<li><b class="%s">%s%s</b> <span class="pn">%s</span>%s</li>'
+                    % ({'good': 'up', 'bad': 'dn'}.get(ben, 'unk'), arrow, num,
+                       html.escape(f.get('n', '?')),
                        ' ' + ''.join(chips) if chips else ''))
         t = trigger_of(f)
         if t and t not in trigs:
@@ -450,9 +493,17 @@ for c in CLS_ORDER:
     body.append('</section>')
 
 body.append('<footer><p>%d skills across 9 trees. Values come from <code>gaa.db</code> via the '
-            'console generators. A sign is the effect&rsquo;s calc method, never the stored '
-            'number, which is always positive. Effects sharing a property and a value are shown '
-            'once, since a scope that does not change the number is not a separate fact. '
+            'console generators. <b>The arrow is the benefit, the sign is the data:</b> '
+            '&#9650; green means the line helps your build, &#9660; red means it costs you, '
+            'and the +/&minus; stays the raw calc method &mdash; so &ldquo;&#9650;&nbsp;&minus;15%% '
+            'Power Pool Cost&rdquo; and &ldquo;&#9650;&nbsp;&minus;5 Protection&rdquo; on an enemy '
+            'both read as gains. Every line names who it lands on (you / allies / enemies). '
+            'An amber value with a <em>polarity?</em> chip is unclassified &mdash; benefit '
+            'depends on intent (Threat) or has not been established; those need investigating, '
+            'not guessing. Effects sharing a property, value, gate and category scope are shown '
+            'once; a different gate or scope is a separate line. Effect Potency (prop 376) is '
+            'labelled the way the game labels it &mdash; by the category it is scoped to '
+            '(Disease, Knockback, &hellip;), never as &ldquo;potency&rdquo;. '
             '&ldquo;Affects&rdquo; lists the devices a skill reaches.</p></footer>'
             % sum(len(v) for v in trees.values()))
 body.append('</main>')
@@ -467,5 +518,6 @@ icon_css = ''.join('.i%s{background-image:url(%s)}' % (d, DEVICON[d])
 parts.append('<style>%s</style>' % icon_css)
 print('icons embedded: %d (referenced %d times)' % (len(USED_ICONS), len(USED_ICONS)))
 
-io.open('skill-reference.html', 'w', encoding='utf-8').write('\n'.join(parts))
-print('wrote skill-reference.html')
+refpath = os.path.join(OUT, 'skill-reference.html')
+io.open(refpath, 'w', encoding='utf-8').write('\n'.join(parts))
+print('wrote', refpath)

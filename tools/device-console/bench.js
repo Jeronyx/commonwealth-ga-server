@@ -90,17 +90,26 @@ window.GA = window.GA || {};
   PROT.concat(CC).concat([51, 211, 412, 390, 243, 244, 255]).forEach(function (p) { EFFECTP[p] = 1; });
   GA.EFFECT_PROPS = EFFECTP;
 
-  // properties where a LOWER number is better for the player
-  // Properties where a REDUCTION is the benefit. Includes ones that modify a penalty rather
-  // than a benefit: less falling damage, less of a shield's movement penalty, less threat.
+  // Properties where a REDUCTION is the benefit for whoever carries the stat.
+  // Single-sourced from benefit.py via window.__POLARITY__ (gen3 injects it before this
+  // script); the literal set is only the standalone fallback. Note 421 Threat is NOT here
+  // any more - its benefit depends on build intent (a tank wants threat), so it is
+  // unclassified and flagged on the reference page instead of guessed.
   var LOWER = { 4: 1, 53: 1, 279: 1, 242: 1, 322: 1, 203: 1,
                 349: 1,   // remote activation time - faster detonation
                 357: 1,   // morale required - cheaper boosts
                 391: 1,   // pet deploy time
                 137: 1,   // falling damage
-                421: 1,   // threat
                 66: 1,    // effect groundspeed - only ever used to strip a slow
                 316: 1 }; // additional damage taken
+  // ownerCost, not the full recipient-perspective 'lower' set: the bench's flag means
+  // "smaller is better for the OWNER", and inflictions (knockback, CC) land on the enemy
+  // where the owner wants them bigger.
+  var POLARITY = (typeof window !== 'undefined' && window.__POLARITY__) || null;
+  if (POLARITY && POLARITY.ownerCost) {
+    LOWER = {};
+    POLARITY.ownerCost.forEach(function (p) { LOWER[p] = 1; });
+  }
   // Potency only ever arrives from your own skills, scoped to something you want moved, so a
   // change in either direction is in your favour.
   var ALWAYS_GOOD = { 376: 1 };

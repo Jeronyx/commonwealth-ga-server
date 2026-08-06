@@ -4,9 +4,11 @@
 #   ga_character_skills  -> allocated skill ids per item profile
 # Mods come from ga_players_inventory.mod_effect_group_ids on the equipped instance, so each
 # piece carries its own real roll rather than a representative variant.
-import sqlite3, json, sys
+import sqlite3, json, sys, os
 sys.stdout.reconfigure(encoding="utf-8")
-OUT = r'C:/Users/patri/AppData/Local/Temp/claude/E--GA-LOCAL-Repo/4220e829-c0b4-416e-90e1-0bc04ececb41/scratchpad/'
+# Generated data lands in out/ next to the scripts (the repo-wide "out/" ignore covers it).
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'out') + os.sep
+os.makedirs(OUT, exist_ok=True)
 db = sqlite3.connect(r"E:\GA_LOCAL\gaa.db"); db.row_factory = sqlite3.Row
 def q(s, a=()): return db.execute(s, a).fetchall()
 

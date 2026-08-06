@@ -14,19 +14,23 @@ these scripts are what produce it.
 
 ## Build order
 
-The generators pass data to each other through JSON files written next to the scripts, so order
-matters:
+The generators pass data to each other through JSON files in `out/` next to the scripts
+(covered by the repo-wide `out/` ignore — regenerate, never hand-edit). The one exception is
+`skilldev.json`, which is committed and lives beside the scripts. Order matters:
 
 ```
-python gen_ix.py      # skill -> device interaction resolver   -> ix.json, ixraw.json, skilldev.json, devmeta.json
-python gen_tree.py    # skill trees, icons, base stats, armour -> tree.json
-python gen2.py        # inventory device model (modes, chips)  -> inv_model.json
-python gen_char.py    # real character builds for user 2381    -> chars.json
-python gen3.py        # renders the final HTML                 -> docs/claude/theorycraft-console/device-console.html
+python gen_ix.py       # skill -> device interaction resolver   -> out/{ix,ixraw,devmeta}.json + skilldev.json
+python gen_tree.py     # skill trees, icons, base stats, armour -> out/tree.json (reads skilldev.json)
+python gen2.py         # inventory device model (modes, chips)  -> out/inv_model.json
+python gen_char.py     # real character builds, 9 accounts      -> out/chars.json
+python gen3.py         # renders the final HTML                 -> docs/claude/theorycraft-console/device-console.html
+python gen_skillref.py # standalone skill reference page        -> out/skill-reference.html
 ```
 
-`gen3.py` must run last — it consumes every other output plus `bench.js`, `builder.js`,
-`app.js`, `style2.css` and `deviceimg.json`.
+`gen3.py` consumes every other output plus `bench.js`, `builder.js`, `app.js`, `style2.css`
+and `out/deviceimg.json`. `gen3.py --public` writes `device-console-public.html` (no accounts).
+`gen_skillref.py` reads `out/tree.json`, `out/inv_model.json` and `out/deviceimg.json`; its
+output is published as the claude.ai skill-reference artifact.
 
 ## The pieces
 
@@ -37,6 +41,8 @@ python gen3.py        # renders the final HTML                 -> docs/claude/th
 | `gen2.py` | Turns the level-50 inventory into a device model: fire modes, effect chips with numeric backing, rolled-mod signatures. |
 | `gen_char.py` | Real saved builds (skills + equipped devices + armour) per character and item profile. |
 | `gen3.py` | Renders everything into one HTML file and inlines the JS/CSS. |
+| `gen_skillref.py` | Skill reference page: every skill beside the effects the console models, for checking one against the other. |
+| `benefit.py` | Single source of stat polarity. `classify(prop, neg, pv, side)` says whether a line helps the build owner — the reference page's ▲/▼ arrows, the character sheet's colouring, and the bench's `lower` flag (via the injected `window.__POLARITY__`) all derive from it. Unclassified stats (Threat) are flagged on the reference page, never guessed. |
 | `bench.js` | `GA.resolve` — the stat resolver. Standalone and side-effect free. Also `GA.playerEffects`, `GA.applyStacking`, `GA.deviceChipsHTML`. |
 | `builder.js` | Skill-tree builder, character loader, equipped-slot toggles, My Player sheet. |
 | `app.js` | Loadout tab switching. |
@@ -47,7 +53,7 @@ see the README there if it ever needs redoing.
 ## Regenerating device artwork
 
 `docs/claude/theorycraft-console/assets/device-icons/*.png` were collected by hand. To rebuild the inlined copy the
-page uses, decode those PNGs into `deviceimg.json` as `{device_id: dataURL}` — `gen3.py` reads
+page uses, decode those PNGs into `out/deviceimg.json` as `{device_id: dataURL}` — `gen3.py` reads
 that file and injects it as `window.__DEVIMG__`. The images are downscaled to 56px before
 inlining to keep the page near 3MB rather than 10MB.
 

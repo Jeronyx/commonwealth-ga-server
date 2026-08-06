@@ -7,8 +7,11 @@
 #  3. effect_group_type: 261 passive-equip, 264 on-hit, 505 hit-situational (conditional), 759 successful-hit, 1104 reactive.
 #  4. Unscoped passives resolve by prop semantics (214 ranged dmg -> ranged devices, 350 pet -> pet devices, etc).
 import sqlite3, json, os
-OUT = r'C:/Users/patri/AppData/Local/Temp/claude/E--GA-LOCAL-Repo/4220e829-c0b4-416e-90e1-0bc04ececb41/scratchpad/'
+# Generated data lands in out/ next to the scripts (the repo-wide "out/" ignore covers it);
+# only skilldev.json is committed and stays beside the script.
 HERE = os.path.dirname(os.path.abspath(__file__))
+OUT = os.path.join(HERE, 'out') + os.sep
+os.makedirs(OUT, exist_ok=True)
 db = sqlite3.connect(r"E:\GA_LOCAL\gaa.db"); db.row_factory = sqlite3.Row
 def q(s, a=()): return db.execute(s, a).fetchall()
 # The game calls it Cooldown wherever the player sees it; the property table says Recharge
@@ -322,11 +325,16 @@ for did in ix:
     out = []
     for m in merged.values():
         m['detail'] = " · ".join(m['details']); m.pop('details')
+        # Per-GROUP facts do not survive the per-skill merge: after fx from several groups are
+        # unioned, the first group's egt/life/sit/cat would masquerade as applying to all of
+        # them. ix.json is the display feed (gen3's interaction chips); anything numeric reads
+        # ixraw.json, which keeps one entry per effect group.
+        for k in ('fx', 'egt', 'life', 'sit', 'sv', 'cat', 'app', 'appv'):
+            m.pop(k, None)
         out.append(m)
     ix[did] = sorted(out, key=lambda x: (KPRI.get(x['kind'], 9), x['tree'] != 'Balanced', x['skill']))
 
-json.dump({str(k): v for k, v in ix.items()},
-          open(r"C:\Users\patri\AppData\Local\Temp\claude\E--GA-LOCAL-Repo\4220e829-c0b4-416e-90e1-0bc04ececb41\scratchpad\ix.json", 'w'), indent=0)
+json.dump({str(k): v for k, v in ix.items()}, open(OUT + 'ix.json', 'w'), indent=0)
 
 # device classification (attack type / pet / aoe / heals) - the bench needs this to pick the
 # right ConvertPropToPropList modifier bucket for a given damage number.
