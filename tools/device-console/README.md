@@ -22,15 +22,24 @@ The generators pass data to each other through JSON files in `out/` next to the 
 python gen_ix.py       # skill -> device interaction resolver   -> out/{ix,ixraw,devmeta}.json + skilldev.json
 python gen_tree.py     # skill trees, icons, base stats, armour -> out/tree.json (reads skilldev.json)
 python gen2.py         # inventory device model (modes, chips)  -> out/inv_model.json
-python gen_char.py     # real character builds, 9 accounts      -> out/chars.json
+python gen_char.py     # the Jeronix showcase account           -> out/chars.json
 python gen3.py         # renders the final HTML                 -> docs/claude/theorycraft-console/device-console.html
 python gen_skillref.py # standalone skill reference page        -> out/skill-reference.html
 ```
 
 `gen3.py` consumes every other output plus `bench.js`, `builder.js`, `app.js`, `style2.css`
-and `out/deviceimg.json`. `gen3.py --public` writes `device-console-public.html` (no accounts).
-`gen_skillref.py` reads `out/tree.json`, `out/inv_model.json` and `out/deviceimg.json`; its
-output is published as the claude.ai skill-reference artifact.
+and `out/deviceimg.json`. `gen_skillref.py` reads `out/tree.json`, `out/inv_model.json` and
+`out/deviceimg.json`.
+
+## Published artifacts
+
+Exactly two, iterated in place — always republish to the SAME URL, never mint a new one:
+
+- **Skill reference** — `https://claude.ai/code/artifact/1ce7a67c-4e92-47e3-b437-9850316cbb50`
+  (from `out/skill-reference.html`): the live document reviewed for accuracy against testing.
+- **Console** — `https://claude.ai/code/artifact/26ff1616-c885-4041-8655-ee853e632396`
+  (from `device-console.html`): the shareable console, with the Jeronix showcase account baked
+  in. The old `--public` accountless split is retired (owner's decision 2026-08-06).
 
 ## The pieces
 

@@ -1,5 +1,5 @@
 # Render inventory console v2 from inv_model.json
-import json, html, os, sys
+import json, html, os
 import benefit as BEN
 SEP = os.sep
 # Committed sources (js/css) live next to this script; generated data lives in out/ beside it
@@ -174,13 +174,10 @@ BUILDJS = open(HERE + SEP + 'builder.js', encoding="utf-8").read()
 TREEJSON = open(BASE + SEP + 'tree.json', encoding="utf-8").read()
 BENCHJS = open(HERE + SEP + 'bench.js', encoding='utf-8').read()
 DEVMETA = json.load(open(BASE + SEP + 'devmeta.json'))
-# `python gen3.py --public` builds the shareable copy: no accounts, no characters, no
-# inventories. The page is then a pure planner - you build everything yourself - which is what
-# gets published for people outside the project. The normal build keeps the live data, because
-# testing against real profiles is the whole point of it.
-PUBLIC = '--public' in sys.argv
-CHARS = ('{"accounts":[],"active":null}' if PUBLIC
-         else open(BASE + SEP + 'chars.json', encoding='utf-8').read())
+# One build (owner's decision 2026-08-06): the console ships with the Jeronix showcase
+# account baked in (gen_char.py bakes only that one) and is itself the shareable page.
+# The old `--public` split - a second accountless copy - is retired.
+CHARS = open(BASE + SEP + 'chars.json', encoding='utf-8').read()
 # gate-resolved interactions with their NUMERIC effects - what GA.resolve consumes
 IXRAW = json.load(open(BASE + SEP + 'ixraw.json'))
 # sit/sv carry the situational gate (1270 Health-Below / 1271 Health-Above + its percentage)
@@ -237,8 +234,7 @@ HTML = (
 '<div class="brand"><h1>Loadout Console</h1><span class="tag">Global Agenda</span>'
 '<span class="sub">every valid device &amp; armor piece, per class &mdash; live level-50 inventory</span></div>'
 '<div class="viewtabs"><button class="viewtab active" data-view="loadout">Loadout</button>'
-+ ('' if PUBLIC else '<button class="viewtab" data-view="tree">My Character</button>')
-+ 
+'<button class="viewtab" data-view="tree">My Character</button>'
 '<button class="viewtab" data-view="craft">TheoryCrafter</button>'
 '<button class="viewtab" data-view="combat">Combat</button></div>'
 '<div id="loadout-nav"><div class="tabs"><button class="tab all active" data-tab="All">All</button>%s</div>'
@@ -290,8 +286,6 @@ HTML = HTML.replace('</script>\n',
                     'window.__CHARS__=(window.__ACCTS__.accounts||[])[0]||null;</script>\n'
                     '<script>' + BUILDJS + '</script>\n'
                     '<script>' + BENCHJS + '</script>\n', 1)
-# The public build writes alongside the full one and never over it - the repo copy is the
-# one carrying the live profiles, and losing that would cost the whole testing workflow.
-_out = os.path.join(OUTDIR, 'device-console-public.html' if PUBLIC else 'device-console.html')
+_out = os.path.join(OUTDIR, 'device-console.html')
 open(_out, "w", encoding="utf-8").write(HTML)
-print("public build" if PUBLIC else "full build", "->", _out, len(HTML), "bytes")
+print("console ->", _out, len(HTML), "bytes")
