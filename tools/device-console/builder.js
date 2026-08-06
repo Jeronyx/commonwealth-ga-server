@@ -942,7 +942,10 @@
     var HIDE = [235, 328];
     (D.base || []).forEach(function (b) {
       if (HIDE.indexOf(b.p) >= 0) return;
-      var key = b.p + '|' + b.pct + '|0';
+      // Stat keys are p|pct|rsk|pv on EVERY layer. A layer with a shorter key silently
+      // stops merging with the skill layer — base+armour protection and skill protection
+      // rendered as duplicate rows when the pv segment was added to only one of them.
+      var key = b.p + '|' + b.pct + '|0|0';
       var st = stats[key] || (stats[key] = { p: b.p, name: b.n, pct: b.pct, rsk: 0, scope: '', total: 0, srcs: [] });
       st.total += b.v;
       st.srcs.push({ skill: b.src, tree: 'BASE', val: b.v, kind: 'passive', life: 0, dev: [], base: 1, layer: 'base' });
@@ -973,7 +976,7 @@
     }
     Object.keys(armAgg).forEach(function (k) {
       var a = armAgg[k];
-      var key = a.p + '|' + a.pct + '|0';
+      var key = a.p + '|' + a.pct + '|0|0';
       var st = stats[key] || (stats[key] = { p: a.p, name: a.n, pct: a.pct, rsk: 0, scope: '', total: 0, srcs: [] });
       st.total += a.v;
       st.srcs.push({ skill: 'Armour (' + a.slots + ' slot' + (a.slots > 1 ? 's' : '') + ')', tree: 'ARMOUR',
@@ -999,7 +1002,7 @@
     eqb.forEach(function (f) {
       var nm = (window.GA && window.GA.statName) ? window.GA.statName(f.p) : null;
       if (!nm) return;
-      var key = f.p + '|' + (f.pct ? 1 : 0) + '|0';
+      var key = f.p + '|' + (f.pct ? 1 : 0) + '|0|0';
       var st = stats[key] || (stats[key] = { p: f.p, name: nm, pct: f.pct ? 1 : 0,
                                              rsk: 0, scope: '', total: 0, srcs: [] });
       st.total += f.v;
@@ -1010,7 +1013,7 @@
     if (act) {
       act.effects.forEach(function (f) {
         liveNow[f.src + '|' + f.p] = 1;      // this skill's conditional effect is firing
-        var key = f.p + '|' + (f.pct ? 1 : 0) + '|0';
+        var key = f.p + '|' + (f.pct ? 1 : 0) + '|0|0';
         var st = stats[key] || (stats[key] = { p: f.p, name: f.name, pct: f.pct ? 1 : 0,
                                                rsk: 0, scope: '', total: 0, srcs: [] });
         st.total += f.v;
