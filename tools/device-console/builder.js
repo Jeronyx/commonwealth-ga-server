@@ -911,6 +911,9 @@
     if (!v) return '';
     var P = window.__POLARITY__ || {};
     function has(a, x) { return (a || []).indexOf(x) >= 0; }
+    // Threat is a build choice: shedding it is a gain, stacking it is the tank's
+    // deliberate trade — neutral, never red.
+    if (has(P.threat, prop)) return v < 0 ? 'pos' : '';
     if (pv) {
       if (has(P.catUnknown, pv)) return '';
       if (has(P.catWantLess, pv)) return v < 0 ? 'pos' : 'neg';

@@ -85,18 +85,20 @@ Two facts no field in the data expresses, hard-coded with the evidence:
   Grenade both proc it. All three carry identical family-252 linkage in the data, so the
   mechanism is unestablished and the carve-out is empirical.
 
-## 3. Kept on data grounds (review flagged, data disagrees)
+## 3. Kept on data grounds — all three CONFIRMED by the owner 2026-08-06
 
-- **iMINIGUN / Helot Minigun / Stormer stay under Heavy Impact.** The review grouped iMINIGUN
-  with the no-knockback guns, but it carries two cat-875 knockback effect groups (eg 7295 /
-  9352, prop 295 = 1.0), Helot carries 1.5, Stormer 1.0. Rhino SMG carries none and dropped.
+The review had flagged these; the data disagreed, and the data was right. No longer
+provisional:
+
+- **iMINIGUN / Helot Minigun / Stormer stay under Heavy Impact.** The review had grouped
+  iMINIGUN with the no-knockback guns, but it carries two cat-875 knockback effect groups
+  (eg 7295 / 9352, prop 295 = 1.0), Helot carries 1.5, Stormer 1.0. Rhino SMG carries none
+  and dropped.
 - **Targeting System stays under Stealth Restealth.** Its item `skill_id` is 287 (Stealth
-  family) and the gated effect is a power-cost cut, which it can take. The engine's
-  GetBuffIndex match rule would apply it in game.
+  family) and the gated effect is a power-cost cut, which it can take — the engine's
+  GetBuffIndex match rule applies it, as predicted.
 - **Deconstructor stays under Super Ninja.** Its item `skill_id` is 328 (Explosives), and the
-  group's remote-activation / deploy-time / cooldown effects can act on it.
-
-If any of these three is disproven in game, it joins `EXCLUDE` with the measurement.
+  group's remote-activation / deploy-time / cooldown effects act on it.
 
 ## 4. Corrections that moved out of the render layer
 
@@ -165,13 +167,16 @@ category: penalties on you (`Movement Penalty`, `Shield Movement Penalty`, `Stim
 `Regen Damage Penalty`) are wanted smaller, everything else bigger.
 
 Rendering: green ▲ = helps the build, red ▼ = costs it, the literal +/− stays. Every
-reference-page line carries a who-chip (you / allies / enemies). Unclassified stats render
-amber with a `polarity?` chip — currently only Threat (prop 421 / category 1601, benefit
-depends on whether the build wants aggro) — and a "bad on somebody else" reading (a skill
-apparently buffing enemies) demotes to the same flag instead of being asserted, since no
-skill does that on purpose. One genuine red exists: Escape Durations' +30% duration is
-scoped to Stim Resistance too, so it stretches the post-stim self-debuff along with the
-escape effects.
+reference-page line carries a who-chip (you / allies / enemies). Threat (420/421) is a
+**build choice** (owner's ruling 2026-08-06, mechanic in `docs/claude/threat.md` and the
+player-facing `docs/gameplay/threat.md`): reductions arrow green, increases render neutral
+with a dashed *build choice* chip — stacking aggro is the tank's deliberate trade, never
+asserted good or bad. Category 1601 (Decoy's threat-shed buff) is want-more. Unclassified
+stats render amber with a `polarity?` chip (currently none), and a "bad on somebody else"
+reading (a skill apparently buffing enemies) demotes to the same flag instead of being
+asserted, since no skill does that on purpose. One genuine red exists: Escape Durations'
++30% duration is scoped to Stim Resistance too, so it stretches the post-stim self-debuff
+along with the escape effects.
 
 The console reads the same tables via `window.__POLARITY__` (injected by `gen3.py`): card
 chips carry small ▲/▼ arrows (side = self prefixes / self effect-group types / owner-cost

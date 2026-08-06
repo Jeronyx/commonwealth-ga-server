@@ -129,6 +129,8 @@ code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.9em}
 .k-enemies{color:var(--foe);border-color:color-mix(in srgb,var(--foe) 45%,var(--line))}
 .k-you{color:var(--dim)}
 .fx b.unk{color:var(--cond)}
+.fx b.ch{color:var(--gate)}
+.k-choice{color:var(--gate);border-style:dashed}
 .k-flag{background:var(--cond);border-color:var(--cond);color:var(--panel);font-weight:700}
 .trig{margin:9px 0 0;font-size:12px;line-height:1.5;color:var(--mut);
   border-left:2px solid color-mix(in srgb,var(--cond) 55%,var(--line));padding-left:10px}
@@ -138,7 +140,8 @@ code{font-family:ui-monospace,"SF Mono",Menlo,Consolas,monospace;font-size:.9em}
   border-left:2px solid var(--cond);padding:2px 0 2px 10px}
 .note em{font-style:normal;font-family:ui-monospace,Consolas,monospace;font-size:9.5px;
   letter-spacing:.1em;text-transform:uppercase;color:var(--cond);display:block;margin-bottom:2px}
-.note.n-fixed{border-left-color:var(--up)} .note.n-fixed em{color:var(--up)}
+.note.n-fixed,.note.n-fixed6{border-left-color:var(--up)} .note.n-fixed em,.note.n-fixed6 em{color:var(--up)}
+.note.n-design{border-left-color:var(--gate)} .note.n-design em{color:var(--gate)}
 
 footer{margin:40px 0 60px;padding-top:18px;border-top:1px solid var(--line)}
 footer p{margin:0;color:var(--dim);font-size:12.5px;max-width:80ch}
@@ -255,8 +258,19 @@ def side_of(node, f, cls=None):
     return 'target'
 
 NOTES = {
-    742: ('display', 'Stored as Falling Damage 1.0 Decrease-% = <b>&minus;100%</b> (immune). '
-                     'Renders as &minus;1.0% because the fraction-scaling rule only fires below 1.'),
+    742: ('fixed6', 'Falling Damage is stored as a 0&ndash;1 fraction: 1.0 Decrease-% = '
+                    '<b>&minus;100%</b> &mdash; no fall damage at all. The fraction-scaling '
+                    'rule previously stopped below 1 and rendered this as &minus;1%.'),
+    890: ('design', 'Threat is PvE aggro: every point of damage you deal is a point of threat, '
+                    'and bosses attack whoever holds the most. This skill deliberately raises '
+                    'yours (+50% on melee) so they stay on you &mdash; the tank&rsquo;s trade. '
+                    'See <em>How Threat Works</em> (docs/gameplay/threat.md).'),
+    546: ('design', 'Raises the threat your damage generates by 15% across everything, keeping '
+                    'PvE aggro on you &mdash; deliberate for a tank. See <em>How Threat Works</em> '
+                    '(docs/gameplay/threat.md).'),
+    598: ('design', 'The threat cut means rifle damage draws 10% less PvE aggro &mdash; bosses '
+                    'come for you later than your damage says they should. See <em>How Threat '
+                    'Works</em> (docs/gameplay/threat.md).'),
     674: ('data',    'The gate is Medic Guns (skill 405) and the Pain Gun carries skill 405, but the '
                      'text says &ldquo;excluding the Pain Gun&rdquo; &mdash; the resolver carves it out to match.'),
     852: ('data',    'Triage Wave is carved out: measured on a solo Triage rescue, it applies its own '
@@ -347,8 +361,9 @@ def fx_html(node, cls=None):
             chips.append('<em class="k k-life">%gs</em>' % f['life'])
         # The arrow is the BENEFIT, the sign is the raw calc method - they disagree on
         # purpose: "-100% Movement Penalty" is a gain (green up-arrow, literal minus), and a
-        # protection shred on the enemy is a gain too. '' = unclassified: rendered loud and
-        # amber so it gets investigated rather than guessed at.
+        # protection shred on the enemy is a gain too. 'choice' = a deliberate build trade
+        # (stacking threat to tank, owner's ruling 2026-08-06): neutral, chipped, never
+        # asserted good or bad. '' = unclassified: loud and amber, investigated never guessed.
         ben = benefit.classify(f.get('p'), bool(neg), f.get('pv') or 0, side)
         # "bad" on somebody ELSE means the line reads as buffing enemies or debuffing allies.
         # No skill does that on purpose - it is a side-reading anomaly (Stealth Protection's
@@ -356,11 +371,15 @@ def fx_html(node, cls=None):
         # investigation rather than asserted. Genuine red is reserved for self-costs.
         if ben == 'bad' and side != 'you':
             ben = ''
-        if not ben:
+        if ben == 'choice':
+            chips.append('<em class="k k-choice" title="More threat keeps PvE aggro on you - '
+                         'the tank&#39;s job, taken on purpose. Less keeps bosses off you. '
+                         'See How Threat Works (docs/gameplay/threat.md).">build choice</em>')
+        elif not ben:
             chips.append('<em class="k k-flag">polarity?</em>')
         arrow = {'good': '&#9650;&#8202;', 'bad': '&#9660;&#8202;'}.get(ben, '')
         rows.append('<li><b class="%s">%s%s</b> <span class="pn">%s</span>%s</li>'
-                    % ({'good': 'up', 'bad': 'dn'}.get(ben, 'unk'), arrow, num,
+                    % ({'good': 'up', 'bad': 'dn', 'choice': 'ch'}.get(ben, 'unk'), arrow, num,
                        html.escape(f.get('n', '?')),
                        ' ' + ''.join(chips) if chips else ''))
         t = trigger_of(f)
@@ -424,7 +443,8 @@ def skill_row(node, cls=None):
     if node['id'] in NOTES:
         kind, text = NOTES[node['id']]
         note = '<p class="note n-%s"><em>%s</em>%s</p>' % (
-            kind, {'display': 'display', 'data': 'text vs data', 'fixed': 'fixed 05 Aug'}[kind], text)
+            kind, {'display': 'display', 'data': 'text vs data', 'fixed': 'fixed 05 Aug',
+                   'fixed6': 'fixed 06 Aug', 'design': 'by design'}[kind], text)
     pre = prereq(node)
     # The device list spans the description AND effect columns. Inside the narrow description
     # cell it only ever fitted two columns, which defeats the point of a column per class.
@@ -498,9 +518,12 @@ body.append('<footer><p>%d skills across 9 trees. Values come from <code>gaa.db<
             'and the +/&minus; stays the raw calc method &mdash; so &ldquo;&#9650;&nbsp;&minus;15%% '
             'Power Pool Cost&rdquo; and &ldquo;&#9650;&nbsp;&minus;5 Protection&rdquo; on an enemy '
             'both read as gains. Every line names who it lands on (you / allies / enemies). '
-            'An amber value with a <em>polarity?</em> chip is unclassified &mdash; benefit '
-            'depends on intent (Threat) or has not been established; those need investigating, '
-            'not guessing. Effects sharing a property, value, gate and category scope are shown '
+            'A <em>build choice</em> chip marks a deliberate trade with no universal polarity: '
+            'stacking Threat keeps PvE aggro on you (the tank&rsquo;s job), shedding it keeps '
+            'bosses off you &mdash; reductions arrow green, increases stay neutral. '
+            'An amber value with a <em>polarity?</em> chip is unclassified and needs '
+            'investigating, not guessing. '
+            'Effects sharing a property, value, gate and category scope are shown '
             'once; a different gate or scope is a separate line. Effect Potency (prop 376) is '
             'labelled the way the game labels it &mdash; by the category it is scoped to '
             '(Disease, Knockback, &hellip;), never as &ldquo;potency&rdquo;. '

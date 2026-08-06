@@ -62,7 +62,8 @@ on) × (direction) × (stat polarity):
 | owner cost (yours even unprefixed; less is the gain) | 4 / 203 Cooldown · 53 Refire · 279 Deploy · 242, 322 Power Pool Cost · 349 Remote Activation Time · 357 Required Morale · 391 Pet Deploy Time · 137 Falling Damage · 66 Effect GroundSpeed Modifier |
 | infliction (recipient wants less, so on an enemy more is your gain) | 316 Additional Damage Taken · 60 Knockback / 295 Pushback · the CC props |
 | scoped by pv | 376 Effect Potency and 208 Effect Lifetime classify by their `property_value_id` category: penalties on you (Movement Penalty, Shield Movement Penalty, Stim Resistance, Regen Damage Penalty) are wanted smaller, everything else bigger |
-| unclassified — flagged, never guessed | 420/421 Threat and category 1601: benefit depends on whether the build *wants* aggro (Assault Melee III adds threat as a tank taunt; Decoy sheds it). Amber `polarity?` on the reference page |
+| build choice (420/421 Threat) | Owner's ruling 2026-08-06: shedding threat arrows green (bosses come for you later); stacking it renders neutral with a dashed *build choice* chip — the tank's deliberate trade, never asserted good or bad. Category 1601 (Decoy's shed-buff, its only occupant) is want-more: extending it is a gain |
+| unclassified — flagged, never guessed | currently empty; anything landing here renders amber with a `polarity?` chip |
 | everything else | higher is better |
 
 Distinguish 421 Threat **Modifier** (a percentage on threat you generate — Decoy's −20%)

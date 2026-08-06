@@ -58,7 +58,11 @@ def effects_for(grp, sid):
             val = round(e['bv'], 3)
             # Percentages are stored two ways: whole numbers (10.0 = 10%) and 0-1 fractions
             # (0.4 = 40%, e.g. Power Pool Increase, GroundSpeed slows). Normalise to whole %.
-            if calc in (68, 69) and 0 < abs(val) < 1:
+            # Fraction-stored props need the boundary INCLUSIVE: Athletics' Falling Damage
+            # is stored 1.0 Decrease-% = -100% (no fall damage at all), and the strict `< 1`
+            # rendered it as -1% for weeks.
+            FRACTION_PROPS = {137}
+            if calc in (68, 69) and (0 < abs(val) < 1 or (abs(val) == 1 and e['p'] in FRACTION_PROPS)):
                 val = round(val * 100, 2)
             # property_value_id scopes the effect to one effect CATEGORY. The game names
             # prop 376 by that scope, never as "potency": Death Medic's line reads "Disease"

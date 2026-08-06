@@ -47,23 +47,30 @@ HIGHER_BETTER = {
     390, 412,                            # max HP
 }
 
-# Deliberately unclassified: benefit depends on the build's intent, so the pages flag
-# these for review instead of guessing.
-#   421 Threat Modifier - Assault Melee III ADDS threat (a tank taunt perk) while other
-#       skills shed it; more threat helps a tank and hurts everyone else.
-UNKNOWN_PROPS = {420, 421}
+# Threat is a BUILD CHOICE, not a polarity (owner's ruling 2026-08-06, mechanic mapped in
+# docs/claude/threat.md + docs/gameplay/threat.md): more threat keeps PvE aggro on you -
+# the tank's job, deliberately taken (Assault Melee III +50%) but still a survival cost -
+# while less keeps bosses off you. So a REDUCTION is unambiguously a gain, and an INCREASE
+# is by design: rendered neutral with a "build choice" marker, never asserted good or bad.
+THREAT_PROPS = {420, 421}
+
+# Nothing is currently unclassified. Anything landing here renders amber with a
+# `polarity?` flag on the reference page - classify it or flag it, never guess.
+UNKNOWN_PROPS = set()
 
 # Effect categories (property_value_id scopes) that are PENALTIES on their carrier -
 # scaling them DOWN is the benefit. Every other scoped category a potency/duration
-# modifier reaches (debuffs you inflict, buffs you grant) is wanted bigger.
+# modifier reaches (debuffs you inflict, buffs you grant) is wanted bigger - including
+# 1601 Threat Modifier: its only occupant is Decoy's threat-shedding buff, so extending
+# it (Escape Durations' +30%) is more of a gain, not an open question.
 CAT_WANT_LESS = {
     1360,   # Movement Penalty (the minigun move penalty Super Destroyer removes)
     1452,   # Shield Movement Penalty (Super Tank)
     774,    # Stim Resistance (the post-stim debuff on you)
     1589,   # Regen Damage Penalty
 }
-# Scoped categories with no established polarity - same ambiguity as prop 421.
-CAT_UNKNOWN = {1601}    # Threat Modifier category
+# Scoped categories with no established polarity (empty; same contract as UNKNOWN_PROPS).
+CAT_UNKNOWN = set()
 
 
 def want(prop, pv=0):
@@ -84,8 +91,12 @@ def want(prop, pv=0):
 
 
 def classify(prop, neg, pv=0, side=''):
-    """'good' / 'bad' / '' for the BUILD OWNER.
-    side: '' / 'you' / 'allies' apply directly; 'enemies' / 'target' flip."""
+    """'good' / 'bad' / 'choice' / '' for the BUILD OWNER.
+    side: '' / 'you' / 'allies' apply directly; 'enemies' / 'target' flip.
+    Threat is side-independent - it is always about the instigator's own aggro:
+    shedding it is a gain, stacking it is the tank's deliberate trade ('choice')."""
+    if prop in THREAT_PROPS:
+        return 'good' if neg else 'choice'
     w = want(prop, pv)
     if w is None:
         return ''
@@ -101,5 +112,6 @@ def tables():
     full recipient-perspective set that classify() uses."""
     return {'lower': sorted(LOWER_BETTER), 'higher': sorted(HIGHER_BETTER),
             'ownerCost': sorted(OWNER_COST),
+            'threat': sorted(THREAT_PROPS),
             'unknownProps': sorted(UNKNOWN_PROPS),
             'catWantLess': sorted(CAT_WANT_LESS), 'catUnknown': sorted(CAT_UNKNOWN)}
