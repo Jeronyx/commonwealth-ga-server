@@ -2561,6 +2561,7 @@ footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);color:v
       if (c.prop === 150) d.persist = c.value;        // Persist Time - how long a boost lasts
       if (c.prop === 318) d.morale = c.value;         // Required Points To Fire
       if (c.prop === 279) d.deployTime = c.value;     // build time of whatever it puts down
+      if (c.prop === 354) d.lifespan = c.value;       // how long the spawned thing lives
     });
     // c.life is the printed duration; c.lifeVal is what it becomes after the build's Effect
     // Lifetime skills. projectedEffects already used lifeVal, so effects on OTHER people ran
@@ -2688,7 +2689,8 @@ footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);color:v
       var sp = d.spawn || (d.spawn = { deploy: 0, life: 0, refire: 0, hp: 0,
                                        name: sm.name || 'payload',
                                        hit: raw.hit || d.hit || {},
-                                       prot: {}, buffs: [], strip: raw.strip || [],
+                                       prot: {}, buffs: [], debuffs: [],
+                                       strip: raw.strip || [],
                                        shots: [], dots: [], heals: [], powers: [] });
       if (raw.hit) sp.hit = raw.hit;
       if (raw.strip && raw.strip.length) sp.strip = raw.strip;
@@ -2729,18 +2731,28 @@ footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);color:v
           // 1s effects re-applied every pulse to whoever is in the radius
           sp.buffs.push({ p: c.prop, name: GA.statName(c.prop), v: c.value, pct: c.isPct,
                           cat: c.cat, app: c.app || 0, appv: c.appv || 0, life: lifeOf(c) });
+        } else if ((GA.LANDS_ON_OTHER || {})[c.egt] && c.neg && lifeOf(c) > 0
+                   && GA.statName(c.prop)) {
+          // riders the payload lands with every hit - the Lockdown beam's -30% slow, the
+          // Venom mine's shred. Re-applied per volley to whoever the payload is hitting.
+          sp.debuffs.push({ p: c.prop, name: GA.statName(c.prop), v: -c.value, pct: c.isPct,
+                            cat: c.cat, app: c.app || 0, appv: c.appv || 0, life: lifeOf(c) });
         }
       });
     });
     if (d.spawn && !d.spawn.shots.length && !d.spawn.dots.length && !d.spawn.heals.length
-        && !d.spawn.powers.length && !d.spawn.buffs.length
+        && !d.spawn.powers.length && !d.spawn.buffs.length && !d.spawn.debuffs.length
         && !(d.spawn.strip || []).length && !d.spawn.hp) d.spawn = null;
-    // Deploy time lives on the CARRIER's stat chips (a turret takes 25s to build itself,
-    // a station 15 - skill-reduced through resolve), not on the payload's own rows. A
-    // turret placed mid-fight is a promise, not a gun. Welding acceleration is not yet
-    // modelled; the resolved figure is the unwelded one.
+    // Deploy time and lifespan live on the CARRIER's stat chips (a turret takes 25s to
+    // build itself, a station 15; a drone flies for 10s - skill-extended through resolve),
+    // not on the payload's own rows. A turret placed mid-fight is a promise, not a gun,
+    // and a drone is a visitor, not a fixture. Welding acceleration is not yet modelled;
+    // the resolved deploy figure is the unwelded one.
     if (d.spawn && d.deployTime > 0) {
       d.spawn.deploy = Math.max(d.spawn.deploy, d.deployTime);
+    }
+    if (d.spawn && d.lifespan > 0 && !d.spawn.life) {
+      d.spawn.life = d.lifespan;
     }
 
     // How often it is sensible to use this thing.
@@ -3731,6 +3743,18 @@ footer{margin-top:40px;padding-top:18px;border-top:1px solid var(--line);color:v
                             iv: dt.iv, next: t + dt.iv, until: t + dtLife,
                             hit: { cat: dt.cat, damageType: sp.hit.dmg,
                                    attackType: sp.hit.atk, rating: sp.hit.rating } });
+            });
+            // riders the payload lands with the hit - the Lockdown beam's slow refreshes
+            // for as long as the beam holds; protection can refuse them outright (S31)
+            (sp.debuffs || []).forEach(function (df) {
+              var dfLife = effectLifeAfterProt(v, df.cat, df.life, sp.hit.rating);
+              if (!(dfLife > 0)) return;
+              v.live = v.live.filter(function (x) {
+                return !(x.src === sp.name && x.p === df.p);
+              });
+              v.live.push({ p: df.p, name: df.name, v: df.v, pct: df.pct, cat: df.cat,
+                            app: df.app, appv: df.appv, at: t, aura: 1,
+                            src: sp.name, until: t + dfLife, devId: ins.devId });
             });
           });
           // support: the aura reaches the whole side - heals, power, the Sensor's damage
