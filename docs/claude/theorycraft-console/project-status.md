@@ -150,20 +150,51 @@ it belongs behind one named flag in the mitigation stage, since it is scheduled 
 
 ---
 
-## The next major piece
+## The combat simulator, as of 2026-08-07
 
-Everything so far is **attacker-side only**. The console computes one player's output and stats;
-it does not run `CalcProtection`, the per-hit health cap, or any defender model.
+The two-sided goal is built and has grown a full timeline: rosters on two teams, every device
+aimable, mitigation per §8 with the health cap and pre-mitigation 316, stacking buckets,
+shields as pools, boosts on morale timing, the off-hand GCD, and power that runs out.
 
-The original goal was two-sided: *"this medic uses Frenzy on this recon, so when he shoots this
-assault with these skills and armour he does X"*. To get there:
+**Deployables are modelled end to end** (the week of 2026-08-06/07, commits `a225a794` →
+`e8771ae9`):
 
-1. Feed a **defender spec** (the same shape `GA.resolve` already takes) through the mitigation
-   stage in §8 — category axis, damage-type axis, attack-type axis, multiplied.
-2. Apply prop 316 "Additional Damage Taken" *before* mitigation (§10).
-3. Apply the per-hit health cap (§8).
-4. Let a third party apply effects to either side — `GA_BENCH_STATE` / `activeState()` already
-   returns "something is affecting this player, and here is the source of each part", which is
-   deliberately the shape a second actor's buff would produce.
+- A payload instance spawns each time its carrier fires; it **arms after its deploy time**
+  (carrier prop 279 through the skill layer — turret 25s, station 15, bombs instant),
+  **lives its lifespan** (carrier prop 354 — drones 10s, skill-extended) or Duration
+  (prop 150; "until destroyed" = the run), and **acts on its own refire** (prop 53). That
+  makes mines one-shot detonations, turrets continuous fire, and stations periodic pulses,
+  with no per-device special cases.
+- **Bombs splash all enemies** (owner's ruling); **mines are one deployment each** (the game
+  bakes in that only one of each mine damages — each throw replaces the last, deliberately).
+- **Structures are shootable entities**: HP from data (deployables.health / bots.hit_points
+  as skill-scalable prop-339 chips), mitigation against their own `Deployed:` protections
+  plus a seeded mechanical bio-immunity — a Pain Gun does nothing to a turret or station
+  (owner-confirmed). Mech-only chips (EMP damage, the iMinigun/Grizzly/Hornet `Mech:`
+  protection shreds) land exactly there, as timed armour strips. Repair arms weld them
+  (prop 260, never on a player) and aim ONLY at friendly structures.
+- **Targeting is the pawn rule** (owner-confirmed): player weapons shoot anything; a bot
+  payload (turret, drone) only acquires PAWNS — enemy players and enemy bots, never a
+  station/wall/mine (`ATgDeployable`, not a pawn; even Force Target's taunt only points AI
+  at the taunter). gen2 exports `src: bot|dep` per SPAWN row; aim lists and the run enforce
+  it. Turret-vs-turret is legal and verified.
+- Payload rider debuffs (Lockdown's −30% slow beam) re-apply per volley and lapse when the
+  fire stops; station auras (Medical heal + cures, Sensor +15% damage, Power Station's
+  +5 Physical protection pulse + power) reach the whole side; instances outlive their owner.
 
-`GA.resolve` is standalone and side-effect free specifically so it can be called once per side.
+## Outstanding — pick up here
+
+1. **Repair-arm refinements**: welding should *accelerate construction* (deploy ÷ (1 +
+   DeployRate ~4.5) — the run currently uses the unwelded figure), and the arm's damage
+   buff to the structure it repairs (Focused +15%/ALT +40%, 1s refresh) is not applied to
+   the instance's output.
+2. **Numbers verification pass over Engineer/Drones**: hand-check resolved values against
+   expected for Pet Damage, deploy-time cuts, lifespan extensions, Station Buff on aura
+   values, Health-Max-Deployables on structure HP. Known loose thread: a Medical Station
+   (1500 HP, Ranged 20) died ~0.6s faster under Personal Turret fire than the mitigation
+   arithmetic predicts — either the test build's skills explain it or an axis is slipping;
+   chase it here.
+3. AOE payload splash currently hits enemies only as *players* — a mine detonating amid
+   enemy structures does not damage them (needs a ruling on whether it should).
+4. Dome Shield: exists as a destructible structure; what a dome DOES (blocking fire through
+   its surface) is positional and stays unmodelled.
