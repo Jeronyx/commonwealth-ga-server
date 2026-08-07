@@ -1753,6 +1753,52 @@
         });
       }
     });
+    // ---- SPAWN payload: what the thing this device PUTS DOWN does over time ----
+    // The model has carried full payload rows since "a bomb is its payload"; the run never
+    // read them, so a Venom Bomb slowed its victim while dealing none of its 900 damage,
+    // stations healed nobody and turrets never fired. A payload instance is created each
+    // time the carrier fires: it ARMS after its own deploy time (prop 279 - bombs 0.001,
+    // drones 1, mines 4, stations 15), LIVES for its Duration (prop 150; the "Lasts until
+    // destroyed" sentinel and a missing duration both mean the whole run, nothing can shoot
+    // a deployable yet), and ACTS on its own refire (prop 53) - which is what makes a mine
+    // a one-shot detonation, a turret continuous fire and a station a periodic pulse.
+    // Values come off the RESOLVED spawn rows, so the skill layer (Pet Damage, Station Buff)
+    // is already in them; live stims are not applied to a structure's output.
+    d.spawn = null;
+    (res.modes || []).forEach(function (sm, sk) {
+      if (sm.kind !== 'SPAWN') return;
+      var raw = (dev.modes || [])[sk] || {};
+      var sp = d.spawn || (d.spawn = { deploy: 0, life: 0, refire: 0,
+                                       name: sm.name || 'payload',
+                                       hit: raw.hit || d.hit || {},
+                                       shots: [], dots: [], heals: [], powers: [] });
+      if (raw.hit) sp.hit = raw.hit;
+      (sm.chips || []).forEach(function (c) {
+        if (c.base === null) return;
+        if (c.prop === 279) { sp.deploy = Math.max(sp.deploy, c.value); return; }
+        if (c.prop === 150 || c.prop === 354) { sp.life = Math.max(sp.life, c.value); return; }
+        if (c.prop === 53) { sp.refire = sp.refire ? Math.min(sp.refire, c.value) : c.value; return; }
+        if ((GA.PLAYER_IMMUNE || {})[c.cat]) return;
+        if (c.prop === 51 || c.prop === 211) {
+          if (c.sign < 0) {
+            if (c.iv > 0 && lifeOf(c) > 0) {
+              sp.dots.push({ raw: c.value, cat: c.cat, life: lifeOf(c), iv: c.iv,
+                             app: c.app || 0, appv: c.appv || 0 });
+            } else {
+              sp.shots.push({ raw: c.value, cat: c.cat, life: lifeOf(c) });
+            }
+          } else {
+            sp.heals.push({ v: c.value, life: lifeOf(c), iv: c.iv || 0,
+                            cat: c.cat, app: c.app || 0, appv: c.appv || 0 });
+          }
+        } else if (c.prop === 243 && c.sign > 0) {
+          sp.powers.push({ v: c.value });
+        }
+      });
+    });
+    if (d.spawn && !d.spawn.shots.length && !d.spawn.dots.length
+        && !d.spawn.heals.length && !d.spawn.powers.length) d.spawn = null;
+
     // How often it is sensible to use this thing.
     //
     // A support device that applies timed effects should be re-fired when they EXPIRE, not as
@@ -1854,7 +1900,8 @@
                maxPW: dv.totPW, pw: dv.totPW, baseMaxPW: dv.totPW, spentUntil: 0,
                regen: baseRegen(col.stats), hpRegen: baseHpRegen(col.picked),
                baseProt: GA.protectionFrom(col.stats),
-               devs: devs, proj: proj, aim: a.aim, live: [], dead: false, spentThisStep: false,
+               devs: devs, proj: proj, aim: a.aim, live: [], dead: false, spawns: [],
+               spentThisStep: false,
                offhandReady: 0, sched: sched[a.id] || {} };
     }).filter(Boolean);
     var byId = {};
@@ -2254,6 +2301,19 @@
                + (/every/.test(d.cadence || '') ? ', ' + d.cadence : ''), 'fire', d.id, d.slot);
             d.firedOnce = true;
           }
+          // put the payload down. One live instance per slot - redeploying replaces it, the
+          // way placing a new turret moves the old one - and the instance then runs on its
+          // OWN clock in the payload section below, surviving even its owner's death.
+          if (d.spawn) {
+            var armAt = t + (d.spawn.deploy || 0);
+            a.spawns = (a.spawns || []).filter(function (x) { return x.slot !== d.slot; });
+            a.spawns.push({ sp: d.spawn, slot: d.slot, devId: d.id, name: d.name,
+                            from: armAt, next: armAt, fired: false,
+                            until: d.spawn.life > 0 ? armAt + d.spawn.life : Infinity });
+            ev(t, a.id, d.name + ' deploys ' + d.spawn.name
+               + (d.spawn.deploy >= 0.5 ? ' (arms in ' + fmt1(d.spawn.deploy) + 's)' : ''),
+               'fire', d.id, d.slot);
+          }
           // damage
           d.shots.forEach(function (sh) {
             if (sh.bs && !d.backstab) return;
@@ -2534,6 +2594,113 @@
                             src: f.src, until: t + fLife, devId: d.id });
             });
           });
+        });
+      });
+
+      // Deployed payloads act on their own clock: a mine detonates once when it arms, a
+      // turret fires every refire, a station pulses its aura. Damage goes to the carrier's
+      // aimed enemy (or the first one standing) and is mitigated on the PAYLOAD's axes -
+      // a Venom mine's blast is AOE whatever the throw was. Support pulses reach every
+      // living teammate including the owner: the run has no positions, so "in the aura"
+      // is everyone on the side. Instances outlive their owner - a turret keeps firing.
+      S.actors.forEach(function (a) {
+        if (!a.spawns || !a.spawns.length) return;
+        a.spawns = a.spawns.filter(function (ins) {
+          if (t > ins.until || ins.done) {
+            if (!ins.done) ev(t, a.id, ins.sp.name + ' expires', 'expire', ins.devId);
+            return false;
+          }
+          return true;
+        });
+        a.spawns.forEach(function (ins) {
+          if (t + 1e-9 < ins.from) return;
+          var sp = ins.sp;
+          var volley = 0;
+          if (sp.refire > 0) {
+            while (ins.next <= t + 1e-9 && volley < 200) { ins.next += sp.refire; volley++; }
+          } else if (!ins.fired) {
+            volley = 1; ins.fired = true;
+            // a detonation is the whole payload; the instance is spent once its DoTs are seeded
+            if (!sp.heals.length && !sp.powers.length) ins.done = true;
+          }
+          if (!volley) return;
+          if (!ins.announced) {
+            ins.announced = true;
+            var act = sp.shots.length || sp.dots.length
+              ? (sp.refire > 0 ? 'opens fire' : 'detonates') : 'starts its aura';
+            ev(t, a.id, ins.sp.name + ' ' + act, 'fire', ins.devId, ins.slot);
+          }
+          // damage: aimed enemy first, else whoever is standing
+          var tid = null;
+          var aimT = a.aim[ins.slot], av = aimT && S.byId[aimT];
+          if (av && !av.dead && av.team !== a.team) tid = aimT;
+          else S.actors.some(function (x) {
+            if (!x.dead && x.team !== a.team) { tid = x.id; return true; }
+            return false;
+          });
+          var v = tid && S.byId[tid];
+          if (v && (sp.shots.length || sp.dots.length)) {
+            sp.shots.forEach(function (sh) {
+              var hitInfo = { cat: sh.cat, damageType: sp.hit.dmg, attackType: sp.hit.atk,
+                              rating: sp.hit.rating };
+              var atFull = v.hp >= v.maxHP;
+              var xt = liveExtraTaken(v);
+              var m = GA.mitigate(sh.raw, hitInfo, protNow(v),
+                atFull ? { healthCapArmed: 1, maxHP: v.maxHP, curHP: v.hp, extraTaken: xt }
+                       : { extraTaken: xt });
+              if (atFull && volley > 1) {
+                var rest = GA.mitigate(sh.raw, hitInfo, protNow(v), { extraTaken: xt });
+                v.hp -= m.shown + rest.shown * (volley - 1);
+                noteBreaks(drainShields(v, m, 1, t));
+                noteBreaks(drainShields(v, rest, volley - 1, t));
+              } else {
+                v.hp -= m.shown * volley;
+                noteBreaks(drainShields(v, m, volley, t));
+              }
+              if (v.hp <= 0 && !v.dead) {
+                v.dead = true; v.hp = 0; deaths[v.id] = t;
+                ev(t, v.id, v.cls + ' #' + v.id + ' dies', 'death', null);
+              }
+            });
+            sp.dots.forEach(function (dt) {
+              var dtLife = effectLifeAfterProt(v, dt.cat, dt.life, sp.hit.rating);
+              if (!(dtLife > 0)) {
+                ev(t, v.id, sp.name + ' burn refused by protection', 'strip', ins.devId);
+                return;
+              }
+              var dv = bucketVerdict(v.dots = v.dots || [], sp.name, dt.cat, dt.app, dt.appv, dt.life);
+              if (dv.how === 'drop') return;
+              if (dv.how === 'refresh') { dv.on.until = t + dtLife; dv.on.raw = dt.raw; return; }
+              if (dv.displace) v.dots = v.dots.filter(function (x) { return x.cat !== dt.cat; });
+              v.dots.push({ src: sp.name, devId: ins.devId, cat: dt.cat, raw: dt.raw,
+                            app: dt.app, appv: dt.appv, life: dtLife, at: t,
+                            iv: dt.iv, next: t + dt.iv, until: t + dtLife,
+                            hit: { cat: dt.cat, damageType: sp.hit.dmg,
+                                   attackType: sp.hit.atk, rating: sp.hit.rating } });
+            });
+          }
+          // support: the aura reaches the whole side
+          if (sp.heals.length || sp.powers.length) {
+            S.actors.forEach(function (m2) {
+              if (m2.dead || m2.team !== a.team) return;
+              sp.heals.forEach(function (h) {
+                if (h.life > 0) {
+                  var hv = bucketVerdict(m2.hots = m2.hots || [], sp.name, h.cat, h.app, h.appv, h.life);
+                  if (hv.how === 'drop') return;
+                  if (hv.how === 'refresh') { hv.on.until = t + h.life; hv.on.raw = h.v; return; }
+                  if (hv.displace) m2.hots = m2.hots.filter(function (x) { return x.cat !== h.cat; });
+                  m2.hots.push({ src: sp.name, devId: ins.devId, raw: h.v, iv: h.iv || h.life,
+                                 next: t + (h.iv || h.life), until: t + h.life,
+                                 cat: h.cat, app: h.app, appv: h.appv, life: h.life, at: t });
+                } else {
+                  m2.hp = Math.min(m2.maxHP, m2.hp + h.v * volley * liveHealMult(m2));
+                }
+              });
+              sp.powers.forEach(function (q) {
+                m2.pw = Math.max(0, Math.min(m2.maxPW, m2.pw + q.v * volley));
+              });
+            });
+          }
         });
       });
 

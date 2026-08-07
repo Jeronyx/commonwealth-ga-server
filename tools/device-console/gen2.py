@@ -568,7 +568,11 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
                 if mn and mn.strip().lower() == 'explode':
                     continue
                 nm = ('%s — %s' % (lab, mn)) if mn and mn.lower() not in lab.lower() else lab
-                rows.append({'kind': 'SPAWN', 'name': nm, 'power': sub.get('power'), 'chips': ch})
+                # The payload's own hit descriptor rides along: the mine's blast is AOE and the
+                # turret's laser is ranged whatever the carrier's throw mode says, and the run
+                # mitigates payload damage on the PAYLOAD's axes.
+                rows.append({'kind': 'SPAWN', 'name': nm, 'power': sub.get('power'),
+                             'chips': ch, 'hit': sub.get('hit')})
         # a launcher whose effects all live on the spawned entity has an empty PRIMARY row
         rows = [r for r in rows if r['chips'] or r.get('power') is not None] or rows[:1]
     return rows
