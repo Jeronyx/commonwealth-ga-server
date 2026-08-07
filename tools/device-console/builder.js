@@ -1222,10 +1222,39 @@
     if (tgt === 'self') return { kind: 'none', targets: [a.id], label: 'self' };
     var rad = 0;
     (dev && dev.modes || []).forEach(function (m) {
-      if ((!mode || !m.kind || m.kind === mode) && m.hit && m.hit.rad > rad) rad = m.hit.rad;
+      // SPAWN rows count: a bomb's blast radius lives on the mine it throws, and the
+      // owner's ruling is that bombs splash all enemies the same as any other AOE device.
+      if ((!mode || !m.kind || m.kind === mode || m.kind === 'SPAWN')
+          && m.hit && m.hit.rad > rad) rad = m.hit.rad;
     });
     var splash = rad > 0 && cat !== 'Melee';
     var enemies = foes(a), mates = allies(a);
+    // Deployed structures are targets too: enemies shoot them, friendly Robotics repair
+    // them. A pseudo-pick names the OWNER's slot; the run resolves it to the live instance.
+    function spawnPicks(side) {
+      var out = [];
+      side.forEach(function (x) {
+        var xctx = actorCtx(x); if (!xctx) return;
+        (xctx.charGear || []).forEach(function (xg, xi) {
+          if (!x.active[xi]) return;
+          var xdev = (window.__DEVMODEL__ || {})[String(xg.id)];
+          if (!xdev) return;
+          var hasHp = (xdev.modes || []).some(function (m) {
+            return m.kind === 'SPAWN' && (m.chips || []).some(function (c) {
+              return c.length > 2 && c[2] && c[2][0] === 339;
+            });
+          });
+          if (!hasHp) return;
+          out.push({ id: 'sp:' + x.id + ':' + xi,
+                     cls: xg.name + ' (' + x.cls + ' #' + x.id + ')', sp: 1 });
+        });
+      });
+      return out;
+    }
+    // A repair arm only works on mechanical targets - it aims at friendly structures, never
+    // at players. (The Pain Gun needs no such carve-out: structures carry Bio +1000 in
+    // their own protections, so bio damage bounces off them by mitigation, not by rule.)
+    var isArm = /Repair Arm|Nanite Repair/.test((g && g.name) || '');
     if (splash) {
       if (tgt === 'friend') return { kind: 'all', targets: mates.map(idOf), label: 'all allies' };
       if (tgt === 'enemy') return { kind: 'all', targets: enemies.map(idOf), label: 'all enemies' };
@@ -1237,10 +1266,11 @@
       }
       return { kind: 'all', targets: sim.actors.map(idOf), label: 'everyone' };
     }
-    var picks = tgt === 'friend' ? mates
-      : tgt === 'enemy' ? enemies
-        : tgt === 'enemyself' ? enemies
-          : sim.actors;
+    var picks = isArm ? spawnPicks(mates)
+      : tgt === 'friend' ? mates
+        : tgt === 'enemy' ? enemies.concat(spawnPicks(enemies))
+          : tgt === 'enemyself' ? enemies.concat(spawnPicks(enemies))
+            : sim.actors;
     return { kind: 'single', picks: picks, targets: [], label: '' };
   }
   function idOf(x) { return x.id; }
@@ -1658,6 +1688,7 @@
       if (c.prop === 4) d.cooldown = c.value;
       if (c.prop === 150) d.persist = c.value;        // Persist Time - how long a boost lasts
       if (c.prop === 318) d.morale = c.value;         // Required Points To Fire
+      if (c.prop === 279) d.deployTime = c.value;     // build time of whatever it puts down
     });
     // c.life is the printed duration; c.lifeVal is what it becomes after the build's Effect
     // Lifetime skills. projectedEffects already used lifeVal, so effects on OTHER people ran
@@ -1708,11 +1739,25 @@
     // rest thrown away - so the card now carries a switch and the run honours it.
     d.hasBackstab = (m.chips || []).some(function (c) { return c.bs && c.base !== null; });
     d.backstab = !!(a.backstab && a.backstab[slot]);
+    d.mechShots = []; d.mechDots = []; d.repairs = [];
     (m.chips || []).forEach(function (c) {
       if (c.base === null) return;
-      // Mechanical-only payloads have no target in a fight between people. Left in the model
-      // so the loadout page can still show them, dropped here so they never land.
-      if ((GA.PLAYER_IMMUNE || {})[c.cat]) return;
+      // Mechanical-only payloads have no target in a fight between PEOPLE - but deployed
+      // structures are mechanical, so when this device is aimed at one (an EMP Grenade at a
+      // turret) these are exactly the chips that land. Collected apart; applied only there.
+      if ((GA.PLAYER_IMMUNE || {})[c.cat]) {
+        if ((c.prop === 51 || c.prop === 211) && c.sign < 0) {
+          if (c.iv > 0 && lifeOf(c) > 0) {
+            d.mechDots.push({ raw: c.value, cat: c.cat, life: lifeOf(c), iv: c.iv, bs: !!c.bs });
+          } else {
+            d.mechShots.push({ raw: c.value, cat: c.cat, bs: !!c.bs });
+          }
+        }
+        return;
+      }
+      // prop 260 Repair heals MECHANICAL targets only - a repair arm pointed at a friendly
+      // structure. Never lands on a player.
+      if (c.prop === 260 && c.sign > 0) { d.repairs.push({ v: c.value }); return; }
       if (c.prop === 51 || c.prop === 211) {
         if (c.sign < 0) {
           // A damage chip with an apply interval is damage OVER TIME: it lands once per
@@ -1768,16 +1813,29 @@
     (res.modes || []).forEach(function (sm, sk) {
       if (sm.kind !== 'SPAWN') return;
       var raw = (dev.modes || [])[sk] || {};
-      var sp = d.spawn || (d.spawn = { deploy: 0, life: 0, refire: 0,
+      var sp = d.spawn || (d.spawn = { deploy: 0, life: 0, refire: 0, hp: 0,
                                        name: sm.name || 'payload',
                                        hit: raw.hit || d.hit || {},
+                                       prot: {}, buffs: [], strip: raw.strip || [],
                                        shots: [], dots: [], heals: [], powers: [] });
       if (raw.hit) sp.hit = raw.hit;
+      if (raw.strip && raw.strip.length) sp.strip = raw.strip;
       (sm.chips || []).forEach(function (c) {
         if (c.base === null) return;
         if (c.prop === 279) { sp.deploy = Math.max(sp.deploy, c.value); return; }
         if (c.prop === 150 || c.prop === 354) { sp.life = Math.max(sp.life, c.value); return; }
         if (c.prop === 53) { sp.refire = sp.refire ? Math.min(sp.refire, c.value) : c.value; return; }
+        // its own health (prop 339, skill-scaled by resolve) - what makes it shootable
+        if (c.prop === 339) { sp.hp = Math.max(sp.hp, c.value); return; }
+        // "Deployed:" protections are the STRUCTURE's armour - Bio +1000 is why a Pain Gun
+        // does nothing to a turret. They mitigate what lands on the instance, never on players.
+        if (c.label && c.label.indexOf('Deployed: ') === 0
+            && (GA.PROT_PROPS || []).indexOf(c.prop) >= 0 && c.sign > 0) {
+          (c.alsoProps || [c.prop]).forEach(function (pid) {
+            sp.prot[pid] = (sp.prot[pid] || 0) + c.value;
+          });
+          return;
+        }
         if ((GA.PLAYER_IMMUNE || {})[c.cat]) return;
         if (c.prop === 51 || c.prop === 211) {
           if (c.sign < 0) {
@@ -1793,11 +1851,25 @@
           }
         } else if (c.prop === 243 && c.sign > 0) {
           sp.powers.push({ v: c.value });
+        } else if ((GA.LANDS_ON_OTHER || {})[c.egt] && !c.neg && lifeOf(c) > 0
+                   && GA.statName(c.prop)) {
+          // aura buffs: the Sensor's +15% damage, the Power Station's +5 Physical - both
+          // 1s effects re-applied every pulse to whoever is in the radius
+          sp.buffs.push({ p: c.prop, name: GA.statName(c.prop), v: c.value, pct: c.isPct,
+                          cat: c.cat, app: c.app || 0, appv: c.appv || 0, life: lifeOf(c) });
         }
       });
     });
-    if (d.spawn && !d.spawn.shots.length && !d.spawn.dots.length
-        && !d.spawn.heals.length && !d.spawn.powers.length) d.spawn = null;
+    if (d.spawn && !d.spawn.shots.length && !d.spawn.dots.length && !d.spawn.heals.length
+        && !d.spawn.powers.length && !d.spawn.buffs.length
+        && !(d.spawn.strip || []).length && !d.spawn.hp) d.spawn = null;
+    // Deploy time lives on the CARRIER's stat chips (a turret takes 25s to build itself,
+    // a station 15 - skill-reduced through resolve), not on the payload's own rows. A
+    // turret placed mid-fight is a promise, not a gun. Welding acceleration is not yet
+    // modelled; the resolved figure is the unwelded one.
+    if (d.spawn && d.deployTime > 0) {
+      d.spawn.deploy = Math.max(d.spawn.deploy, d.deployTime);
+    }
 
     // How often it is sensible to use this thing.
     //
@@ -2141,7 +2213,9 @@
         var before = a.live.length;
         a.live = a.live.filter(function (f) {
           if (f.until > t) return true;
-          ev(t, a.id, f.src + ' ' + f.name + ' expires', 'expire', f.devId);
+          // an aura pulse (a station's 1s buff, re-applied every pulse) churns by design -
+          // logging each lapse buried the whole event stream under maintenance noise
+          if (!f.aura) ev(t, a.id, f.src + ' ' + f.name + ' expires', 'expire', f.devId);
           return false;
         });
         if (before !== a.live.length) { /* mitigation recomputed below */ }
@@ -2244,6 +2318,21 @@
             });
             if (!worth) { d.ready = Math.max(d.ready, t); return; }    // hold fire
           }
+          // Aimed at a deployed structure ('sp:<owner>:<slot>'). A placed instance is
+          // shootable IMMEDIATELY - in game you can (and do) shoot a turret while it is
+          // still building; the arm delay gates only the structure's own actions. A repair
+          // arm with nothing placed holds (no power spent welding air).
+          var aimRaw = a.aim[d.slot];
+          var spAim = (typeof aimRaw === 'string' && aimRaw.indexOf('sp:') === 0)
+            ? aimRaw.split(':') : null;
+          var spTarget = null;
+          if (spAim) {
+            var spOwner = S.byId[spAim[1]];
+            spTarget = (spOwner && (spOwner.spawns || []).filter(function (x) {
+              return String(x.slot) === String(spAim[2]) && !x.done;
+            })[0]) || null;
+            if (!spTarget && d.repairs.length) { d.ready = Math.max(d.ready, t); return; }
+          }
           // A 0.1s step cannot represent a weapon that fires 20 times a second, so count how
           // many shots actually fall inside this step rather than allowing one.
           var volley = 0;
@@ -2296,6 +2385,21 @@
           if (d.cat === 'Offhand') a.offhandReady = t + OFFHAND_GCD;
           if (manual && d.pendingIdx != null) { d.used[d.pendingIdx] = 1; d.pendingIdx = null; }
           var tgts = targetsOf(a, d);
+          if (spAim) {
+            tgts = [];
+            if (!spTarget) {
+              // structure gone - retarget whoever is standing
+              S.actors.some(function (x) {
+                if (!x.dead && x.team !== a.team) { tgts = [x.id]; return true; }
+                return false;
+              });
+              if (!d.retargeted && tgts.length) {
+                d.retargeted = true;
+                ev(t, a.id, d.name + ' retargets ' + S.byId[tgts[0]].cls + ' #' + tgts[0],
+                   'fire', d.id);
+              }
+            }
+          }
           if (!d.firedOnce) {
             ev(t, a.id, d.name + ' fires'
                + (/every/.test(d.cadence || '') ? ', ' + d.cadence : ''), 'fire', d.id, d.slot);
@@ -2307,8 +2411,24 @@
           if (d.spawn) {
             var armAt = t + (d.spawn.deploy || 0);
             a.spawns = (a.spawns || []).filter(function (x) { return x.slot !== d.slot; });
+            // Every deployed thing is MECHANICAL, and mechanical physicality refuses the bio
+            // channels outright - a Pain Gun does nothing to a turret or a station (owner-
+            // confirmed; the mirror of players being immune to the EMP-only categories).
+            // Stations carry explicit Bio +1000 chips; turrets are bots and carry none, so
+            // the physicality immunity is seeded here: Bio / Disease / Bleed axes plus the
+            // Poison damage-type axis. Ignite is deliberately NOT seeded - fire hurts
+            // structures unless one protects itself (Force Wall carries its own +1000).
+            var insProt = {};
+            [159, 160, 371, 324].forEach(function (pid) { insProt[pid] = 1000; });
+            Object.keys(d.spawn.prot || {}).forEach(function (pid) {
+              insProt[pid] = Math.max(insProt[pid] || 0, d.spawn.prot[pid]);
+            });
             a.spawns.push({ sp: d.spawn, slot: d.slot, devId: d.id, name: d.name,
                             from: armAt, next: armAt, fired: false,
+                            hp: d.spawn.hp > 0 ? d.spawn.hp : Infinity,
+                            maxHp: d.spawn.hp > 0 ? d.spawn.hp : Infinity,
+                            prot: insProt, dots: [],
+                            scopeAll: !!(d.scope && d.scope.kind === 'all'),
                             until: d.spawn.life > 0 ? armAt + d.spawn.life : Infinity });
             ev(t, a.id, d.name + ' deploys ' + d.spawn.name
                + (d.spawn.deploy >= 0.5 ? ' (arms in ' + fmt1(d.spawn.deploy) + 's)' : ''),
@@ -2411,6 +2531,38 @@
                                    attackType: d.hit.atk, rating: d.hit.rating } });
             });
           });
+          // Fire aimed at a deployed structure: mitigated against the STRUCTURE's own
+          // protections (Bio +1000 is why a Pain Gun does nothing to a turret), including
+          // the mechanical-only chips a player never feels. Repairs weld it back up.
+          if (spTarget) {
+            d.shots.concat(d.mechShots).forEach(function (sh) {
+              if (sh.bs && !d.backstab) return;
+              var ms = GA.mitigate(sh.raw * liveDamageMult(a, d.hit),
+                { cat: sh.cat, damageType: d.hit.dmg, attackType: d.hit.atk, rating: d.hit.rating },
+                spTarget.prot || {}, {});
+              spTarget.hp -= ms.shown * volley;
+            });
+            d.dots.concat(d.mechDots).forEach(function (dt) {
+              if (dt.bs && !d.backstab) return;
+              var cp = (GA.CAT_PROT || {})[dt.cat];
+              if (cp && Math.floor((spTarget.prot || {})[cp] || 0) >= (d.hit.rating || 100)) {
+                ev(t, a.id, d.name + ' burn refused by ' + spTarget.sp.name, 'strip', d.id);
+                return;
+              }
+              spTarget.dots = spTarget.dots || [];
+              spTarget.dots.push({ raw: dt.raw, iv: dt.iv, next: t + dt.iv, until: t + dt.life,
+                hit: { cat: dt.cat, damageType: d.hit.dmg, attackType: d.hit.atk,
+                       rating: d.hit.rating } });
+            });
+            d.repairs.forEach(function (r) {
+              spTarget.hp = Math.min(spTarget.maxHp, spTarget.hp + r.v * volley);
+            });
+            if (spTarget.hp <= 0 && !spTarget.done) {
+              spTarget.done = true;
+              ev(t, spAim[1], spTarget.sp.name + ' destroyed by ' + d.name, 'death',
+                 spTarget.devId);
+            }
+          }
           // Strip / cleanse. Runs for every target in scope whether or not it paid damage:
           // Neutralize Wave tears buffs off an enemy, a Healing Grenade takes Poison, Disease and
           // Ignite off a team-mate. Same prop-140 mechanic, opposite intent.
@@ -2613,6 +2765,22 @@
           return true;
         });
         a.spawns.forEach(function (ins) {
+          // burns land ON the structure too, mitigated by its own protections
+          if (ins.dots && ins.dots.length) {
+            ins.dots = ins.dots.filter(function (dt) { return dt.until > t; });
+            ins.dots.forEach(function (dt) {
+              if (dt.next > t) return;
+              dt.next += dt.iv;
+              var md = GA.mitigate(dt.raw, dt.hit, ins.prot || {}, {});
+              ins.hp -= md.shown;
+            });
+            if (ins.hp <= 0 && !ins.done) {
+              ins.done = true;
+              ev(t, a.id, ins.sp.name + ' burns down', 'death', ins.devId);
+              return;
+            }
+          }
+          if (ins.done) return;
           if (t + 1e-9 < ins.from) return;
           var sp = ins.sp;
           var volley = 0;
@@ -2621,7 +2789,8 @@
           } else if (!ins.fired) {
             volley = 1; ins.fired = true;
             // a detonation is the whole payload; the instance is spent once its DoTs are seeded
-            if (!sp.heals.length && !sp.powers.length) ins.done = true;
+            if (!sp.heals.length && !sp.powers.length && !sp.buffs.length
+                && !(sp.strip || []).length) ins.done = true;
           }
           if (!volley) return;
           if (!ins.announced) {
@@ -2630,16 +2799,29 @@
               ? (sp.refire > 0 ? 'opens fire' : 'detonates') : 'starts its aura';
             ev(t, a.id, ins.sp.name + ' ' + act, 'fire', ins.devId, ins.slot);
           }
-          // damage: aimed enemy first, else whoever is standing
-          var tid = null;
-          var aimT = a.aim[ins.slot], av = aimT && S.byId[aimT];
-          if (av && !av.dead && av.team !== a.team) tid = aimT;
-          else S.actors.some(function (x) {
-            if (!x.dead && x.team !== a.team) { tid = x.id; return true; }
-            return false;
-          });
-          var v = tid && S.byId[tid];
-          if (v && (sp.shots.length || sp.dots.length)) {
+          // Damage. An AOE payload (a mine's blast) splashes EVERY standing enemy - the
+          // owner's ruling, same as any other AOE device; single-target payloads (a turret's
+          // laser) take the carrier's aim, else whoever is standing.
+          var dmgTargets = [];
+          if (sp.shots.length || sp.dots.length) {
+            if (ins.scopeAll) {
+              S.actors.forEach(function (x) {
+                if (!x.dead && x.team !== a.team) dmgTargets.push(x.id);
+              });
+            } else {
+              var tid = null;
+              var aimT = a.aim[ins.slot], av = aimT && S.byId[aimT];
+              if (av && !av.dead && av.team !== a.team) tid = aimT;
+              else S.actors.some(function (x) {
+                if (!x.dead && x.team !== a.team) { tid = x.id; return true; }
+                return false;
+              });
+              if (tid) dmgTargets.push(tid);
+            }
+          }
+          dmgTargets.forEach(function (tid2) {
+            var v = S.byId[tid2];
+            if (!v || v.dead) return;
             sp.shots.forEach(function (sh) {
               var hitInfo = { cat: sh.cat, damageType: sp.hit.dmg, attackType: sp.hit.atk,
                               rating: sp.hit.rating };
@@ -2678,11 +2860,29 @@
                             hit: { cat: dt.cat, damageType: sp.hit.dmg,
                                    attackType: sp.hit.atk, rating: sp.hit.rating } });
             });
-          }
-          // support: the aura reaches the whole side
-          if (sp.heals.length || sp.powers.length) {
+          });
+          // support: the aura reaches the whole side - heals, power, the Sensor's damage
+          // buff and the Power Station's protection pulse, plus a Medical Station's cures
+          if (sp.heals.length || sp.powers.length || sp.buffs.length
+              || (sp.strip || []).length) {
             S.actors.forEach(function (m2) {
               if (m2.dead || m2.team !== a.team) return;
+              (sp.buffs || []).forEach(function (bf) {
+                m2.live = m2.live.filter(function (x) {
+                  return !(x.src === sp.name && x.p === bf.p);
+                });
+                m2.live.push({ p: bf.p, name: bf.name, v: bf.v, pct: bf.pct, cat: bf.cat,
+                               app: bf.app, appv: bf.appv, at: t, aura: 1,
+                               src: sp.name, until: t + bf.life, devId: ins.devId });
+              });
+              (sp.strip || []).forEach(function (sg) {
+                m2.dots = (m2.dots || []).filter(function (f) {
+                  var gone = (sg.cats || []).indexOf(f.cat) >= 0;
+                  if (gone) ev(t, m2.id, f.src + ' burn cleansed by ' + sp.name,
+                               'strip', ins.devId);
+                  return !gone;
+                });
+              });
               sp.heals.forEach(function (h) {
                 if (h.life > 0) {
                   var hv = bucketVerdict(m2.hots = m2.hots || [], sp.name, h.cat, h.app, h.appv, h.life);
@@ -3146,9 +3346,10 @@
             + '<select class="acsel" data-a="' + a.id + '" data-i="' + i + '">'
             + sc.picks.map(function (t) {
                 var me = String(t.id) === String(a.id);
+                var lab = t.sp ? t.cls : (t.cls + ' #' + t.id + (me ? ' (self)' : ''));
                 return '<option value="' + t.id + '"'
                   + (String(a.aim[i]) === String(t.id) ? ' selected' : '') + '>'
-                  + esc(t.cls) + ' #' + t.id + (me ? ' (self)' : '') + '</option>';
+                  + esc(lab) + '</option>';
               }).join('') + '</select></span>';
         }
         // Weapons with a second fire mode - Inferno-X, iMinigun, Helot, BioFeedback Beam,
@@ -3425,7 +3626,9 @@
     host.querySelectorAll('.acsel').forEach(function (s2) {
       s2.addEventListener('change', function () {
         var a = actorById(s2.dataset.a); if (!a) return;
-        a.aim[s2.dataset.i] = +s2.value;
+        // structure aims are strings ('sp:<owner>:<slot>'); the old numeric coercion
+        // turned them into NaN and the pick silently did nothing
+        a.aim[s2.dataset.i] = s2.value.indexOf('sp:') === 0 ? s2.value : +s2.value;
         renderCombat();
       });
     });

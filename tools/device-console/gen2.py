@@ -160,7 +160,9 @@ PLAYER_IMMUNE = {653, 921}
 
 def spawned_sources(did):
     """Devices whose effects live on a spawned entity (bomb -> explosion deployable,
-    turret/drone -> bot's weapon). Returns [(device_id, label)]."""
+    turret/drone -> bot's weapon). Returns [(device_id, label, hp)], hp being what the
+    spawned THING can take before it dies - deployables.health for structures and mines,
+    bots.hit_points for turrets and drones - so the run can make deployables shootable."""
     out = []
     for m in q("SELECT device_projectile_id proj, deployable_id dep, bot_id bot FROM asm_data_set_devices_data_set_device_modes WHERE device_id=?", (did,)):
         deps, bots = [], []
@@ -168,19 +170,22 @@ def spawned_sources(did):
             for p in q("SELECT spawn_item_id si, spawn_bot_id sb, spawn_deployable_id sd FROM asm_data_set_projectiles WHERE device_projectile_id=? LIMIT 1", (m['proj'],)):
                 if p['sd']: deps.append(p['sd'])
                 if p['sb']: bots.append(p['sb'])
-                if p['si']: out.append((p['si'], iname(p['si']) or 'Impact'))
+                if p['si']: out.append((p['si'], iname(p['si']) or 'Impact', 0))
         if m['dep']: deps.append(m['dep'])
         if m['bot']: bots.append(m['bot'])
         for d in deps:
-            for r in q("SELECT device_id dv, name_msg_translated n FROM asm_data_set_deployables WHERE deployable_id=? LIMIT 1", (d,)):
-                if r['dv']: out.append((r['dv'], (r['n'] or 'Deployed').replace('* ', '')))
+            for r in q("SELECT device_id dv, name_msg_translated n, health hp FROM asm_data_set_deployables WHERE deployable_id=? LIMIT 1", (d,)):
+                if r['dv']: out.append((r['dv'], (r['n'] or 'Deployed').replace('* ', ''), r['hp'] or 0))
         for b in bots:
+            hp = 0
+            for r in q("SELECT hit_points hp FROM asm_data_set_bots WHERE bot_id=? LIMIT 1", (b,)):
+                hp = r['hp'] or 0
             for r in q("SELECT device_id dv FROM asm_data_set_bots_data_set_bot_devices WHERE bot_id=?", (b,)):
-                if r['dv']: out.append((r['dv'], iname(r['dv']) or 'Deployed'))
+                if r['dv']: out.append((r['dv'], iname(r['dv']) or 'Deployed', hp))
     seen = set(); ded = []
-    for d, lab in out:
+    for d, lab, hp in out:
         if d in seen or d == did: continue
-        seen.add(d); ded.append((d, lab))
+        seen.add(d); ded.append((d, lab, hp))
     return ded
 
 STATP = {354: ('Lifespan', 's'), 4: ('Cooldown', 's'), 279: ('Deploy', 's'),
@@ -548,7 +553,7 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
                      'chips': out[0]['zoom'], 'zoom': True, 'hit': out[0]['hit']})
     # Effects that live on a spawned entity (explosion deployable, turret/drone weapon).
     if recurse:
-        for sd, lab in spawned_sources(did):
+        for sd, lab, shp in spawned_sources(did):
             for sub in dev_modes(sd, False, recurse=False, is_spawn=True):
                 ch = dedup(sub['chips'])
                 # An "Equip:" chip here is the SPAWNED thing's own passive, not the carrier's.
@@ -568,11 +573,19 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
                 if mn and mn.strip().lower() == 'explode':
                     continue
                 nm = ('%s — %s' % (lab, mn)) if mn and mn.lower() not in lab.lower() else lab
+                # The spawned thing's own health, as a prop-339 chip so the resolve layer
+                # scales it with Health Max Deployables / Pet Max Health exactly like the
+                # carrier's Structure HP chip. This is what makes a deployable shootable.
+                if shp and not any(len(c) > 2 and c[2] and c[2][0] == 339 for c in ch):
+                    ch.append(['hp', 'Structure HP %d' % int(shp),
+                               [339, float(shp), 67, 0, 0, 0, 0, 0]])
                 # The payload's own hit descriptor rides along: the mine's blast is AOE and the
                 # turret's laser is ranged whatever the carrier's throw mode says, and the run
-                # mitigates payload damage on the PAYLOAD's axes.
+                # mitigates payload damage on the PAYLOAD's axes. Its cures (a Medical
+                # Station's Removes Poison/Disease/Ignite) ride as strip groups the same way
+                # the carrier's own do.
                 rows.append({'kind': 'SPAWN', 'name': nm, 'power': sub.get('power'),
-                             'chips': ch, 'hit': sub.get('hit')})
+                             'chips': ch, 'hit': sub.get('hit'), 'strip': strip_groups(sd)})
         # a launcher whose effects all live on the spawned entity has an empty PRIMARY row
         rows = [r for r in rows if r['chips'] or r.get('power') is not None] or rows[:1]
     return rows
