@@ -1112,7 +1112,10 @@
   function deriveTotals(stats) {
     var keys = Object.keys(stats);
     function baseOf(p) {
-      var st = stats[p + '|0|0'];
+      // stat keys are p|pct|rsk|pv (see collectStats) - this LOOKUP has to match the
+      // construction, and it silently returned 0 HP/0 power for every combat actor when
+      // the pv segment was added to one side only
+      var st = stats[p + '|0|0|0'];
       if (!st) return 0;
       var v = 0;
       st.srcs.forEach(function (x) { if (x.layer === 'base') v += x.val; });
