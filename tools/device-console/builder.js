@@ -1219,6 +1219,17 @@
     var cat = g.cat || '';
     if (cat === 'Jetpack') return { kind: 'none', targets: [], label: 'self only' };
     var tgt = dev ? GA.deviceTarget(dev, mode) : 'enemy';
+    // A drone/turret CARRIER's own mode is often 'self' (you place the thing at your feet) -
+    // but what it places targets enemies, and the player steers WHO it attacks. Aim follows
+    // the payload, not the placement.
+    if (tgt === 'self' && dev) {
+      var spawnHit = (dev.modes || []).filter(function (m) {
+        return m.kind === 'SPAWN' && m.hit && m.hit.tgt;
+      })[0];
+      if (spawnHit && spawnHit.hit.tgt !== 'friend' && spawnHit.hit.tgt !== 'self') {
+        tgt = 'enemy';
+      }
+    }
     if (tgt === 'self') return { kind: 'none', targets: [a.id], label: 'self' };
     var rad = 0;
     (dev && dev.modes || []).forEach(function (m) {
@@ -1231,7 +1242,11 @@
     var enemies = foes(a), mates = allies(a);
     // Deployed structures are targets too: enemies shoot them, friendly Robotics repair
     // them. A pseudo-pick names the OWNER's slot; the run resolves it to the live instance.
-    function spawnPicks(side) {
+    // When the AIMER is itself a bot payload (a turret or drone does the shooting), only
+    // PAWN-backed targets are offered: turret and drone AI acquires pawns - other bots
+    // included - but a station, wall or mine is an ATgDeployable, not a pawn, and no AI
+    // can ever target one (owner-confirmed: not even Force Target redirects fire there).
+    function spawnPicks(side, botOnly) {
       var out = [];
       side.forEach(function (x) {
         var xctx = actorCtx(x); if (!xctx) return;
@@ -1239,18 +1254,24 @@
           if (!x.active[xi]) return;
           var xdev = (window.__DEVMODEL__ || {})[String(xg.id)];
           if (!xdev) return;
-          var hasHp = (xdev.modes || []).some(function (m) {
-            return m.kind === 'SPAWN' && (m.chips || []).some(function (c) {
+          var ok = (xdev.modes || []).some(function (m) {
+            if (m.kind !== 'SPAWN') return false;
+            if (botOnly && m.src !== 'bot') return false;
+            return (m.chips || []).some(function (c) {
               return c.length > 2 && c[2] && c[2][0] === 339;
             });
           });
-          if (!hasHp) return;
+          if (!ok) return;
           out.push({ id: 'sp:' + x.id + ':' + xi,
                      cls: xg.name + ' (' + x.cls + ' #' + x.id + ')', sp: 1 });
         });
       });
       return out;
     }
+    // does THIS device's fire come out of a bot it places?
+    var aimsViaBot = !!(dev && (dev.modes || []).some(function (m) {
+      return m.kind === 'SPAWN' && m.src === 'bot';
+    }));
     // A repair arm only works on mechanical targets - it aims at friendly structures, never
     // at players. (The Pain Gun needs no such carve-out: structures carry Bio +1000 in
     // their own protections, so bio damage bounces off them by mitigation, not by rule.)
@@ -1268,8 +1289,8 @@
     }
     var picks = isArm ? spawnPicks(mates)
       : tgt === 'friend' ? mates
-        : tgt === 'enemy' ? enemies.concat(spawnPicks(enemies))
-          : tgt === 'enemyself' ? enemies.concat(spawnPicks(enemies))
+        : tgt === 'enemy' ? enemies.concat(spawnPicks(enemies, aimsViaBot))
+          : tgt === 'enemyself' ? enemies.concat(spawnPicks(enemies, aimsViaBot))
             : sim.actors;
     return { kind: 'single', picks: picks, targets: [], label: '' };
   }
@@ -1740,7 +1761,7 @@
     // rest thrown away - so the card now carries a switch and the run honours it.
     d.hasBackstab = (m.chips || []).some(function (c) { return c.bs && c.base !== null; });
     d.backstab = !!(a.backstab && a.backstab[slot]);
-    d.mechShots = []; d.mechDots = []; d.repairs = [];
+    d.mechShots = []; d.mechDots = []; d.mechDebuffs = []; d.repairs = [];
     (m.chips || []).forEach(function (c) {
       if (c.base === null) return;
       // Mechanical-only payloads have no target in a fight between PEOPLE - but deployed
@@ -1753,6 +1774,13 @@
           } else {
             d.mechShots.push({ raw: c.value, cat: c.cat, bs: !!c.bs });
           }
+        } else if (c.sign < 0 && lifeOf(c) > 0
+                   && (GA.PROT_PROPS || []).indexOf(c.prop) >= 0) {
+          // the iMinigun's "Mech: Phys Prot -15" - a protection shred that only ever lands
+          // on mechanical targets, i.e. deployed structures
+          (c.alsoProps || [c.prop]).forEach(function (pid) {
+            d.mechDebuffs.push({ p: pid, v: c.value, life: lifeOf(c) });
+          });
         }
         return;
       }
@@ -1817,10 +1845,12 @@
       var sp = d.spawn || (d.spawn = { deploy: 0, life: 0, refire: 0, hp: 0,
                                        name: sm.name || 'payload',
                                        hit: raw.hit || d.hit || {},
+                                       src: raw.src || 'dep',
                                        prot: {}, buffs: [], debuffs: [],
                                        strip: raw.strip || [],
                                        shots: [], dots: [], heals: [], powers: [] });
       if (raw.hit) sp.hit = raw.hit;
+      if (raw.src) sp.src = raw.src;
       if (raw.strip && raw.strip.length) sp.strip = raw.strip;
       (sm.chips || []).forEach(function (c) {
         if (c.base === null) return;
@@ -1838,7 +1868,17 @@
           });
           return;
         }
-        if ((GA.PLAYER_IMMUNE || {})[c.cat]) return;
+        if ((GA.PLAYER_IMMUNE || {})[c.cat]) {
+          // the Grizzly's and Hornet's "Mech: Prot -40" - shreds their fire lands on an
+          // ENEMY STRUCTURE, softening it for everything else
+          if (c.sign < 0 && lifeOf(c) > 0 && (GA.PROT_PROPS || []).indexOf(c.prop) >= 0) {
+            (c.alsoProps || [c.prop]).forEach(function (pid) {
+              sp.mechDebuffs = sp.mechDebuffs || [];
+              sp.mechDebuffs.push({ p: pid, v: c.value, life: lifeOf(c) });
+            });
+          }
+          return;
+        }
         if (c.prop === 51 || c.prop === 211) {
           if (c.sign < 0) {
             if (c.iv > 0 && lifeOf(c) > 0) {
@@ -2206,6 +2246,24 @@
     function noteBreaks(list) {
       (list || []).forEach(function (b) { shieldBreaks.push(b); });
     }
+    // a structure's protections right now: its own armour minus whatever Mech: shreds are
+    // live on it (axis() already floors at zero - shreds strip armour, they never amplify)
+    function insProt(ins, tNow) {
+      ins.shreds = (ins.shreds || []).filter(function (s) { return s.until > tNow; });
+      if (!ins.shreds.length) return ins.prot || {};
+      var out = {};
+      Object.keys(ins.prot || {}).forEach(function (k) { out[k] = ins.prot[k]; });
+      ins.shreds.forEach(function (s) { out[s.p] = (out[s.p] || 0) - s.v; });
+      return out;
+    }
+    function shredIns(ins, list, src, tNow) {
+      (list || []).forEach(function (df) {
+        ins.shreds = (ins.shreds || []).filter(function (s) {
+          return !(s.src === src && s.p === df.p);
+        });
+        ins.shreds.push({ p: df.p, v: df.v, until: tNow + df.life, src: src });
+      });
+    }
     function ev(t, who, text, kind, devId, slot) {
       events.push({ t: Math.round(t * 10) / 10, who: who, text: text, kind: kind || '',
                     dev: devId || null, slot: slot == null ? null : slot });
@@ -2430,16 +2488,19 @@
             // the physicality immunity is seeded here: Bio / Disease / Bleed axes plus the
             // Poison damage-type axis. Ignite is deliberately NOT seeded - fire hurts
             // structures unless one protects itself (Force Wall carries its own +1000).
-            var insProt = {};
-            [159, 160, 371, 324].forEach(function (pid) { insProt[pid] = 1000; });
+            // NOTE: named spawnProt, not insProt - a `var insProt` here would shadow the
+            // runTimeline-level insProt() FUNCTION for this whole callback and turn every
+            // direct-fire-at-structure volley into a TypeError.
+            var spawnProt = {};
+            [159, 160, 371, 324].forEach(function (pid) { spawnProt[pid] = 1000; });
             Object.keys(d.spawn.prot || {}).forEach(function (pid) {
-              insProt[pid] = Math.max(insProt[pid] || 0, d.spawn.prot[pid]);
+              spawnProt[pid] = Math.max(spawnProt[pid] || 0, d.spawn.prot[pid]);
             });
             a.spawns.push({ sp: d.spawn, slot: d.slot, devId: d.id, name: d.name,
                             from: armAt, next: armAt, fired: false,
                             hp: d.spawn.hp > 0 ? d.spawn.hp : Infinity,
                             maxHp: d.spawn.hp > 0 ? d.spawn.hp : Infinity,
-                            prot: insProt, dots: [],
+                            prot: spawnProt, dots: [],
                             scopeAll: !!(d.scope && d.scope.kind === 'all'),
                             until: d.spawn.life > 0 ? armAt + d.spawn.life : Infinity });
             ev(t, a.id, d.name + ' deploys ' + d.spawn.name
@@ -2547,17 +2608,21 @@
           // protections (Bio +1000 is why a Pain Gun does nothing to a turret), including
           // the mechanical-only chips a player never feels. Repairs weld it back up.
           if (spTarget) {
+            // shreds first, so this volley already benefits - the game applies the debuff
+            // with the hit that carries it
+            shredIns(spTarget, d.mechDebuffs, d.name, t);
+            var stProt = insProt(spTarget, t);
             d.shots.concat(d.mechShots).forEach(function (sh) {
               if (sh.bs && !d.backstab) return;
               var ms = GA.mitigate(sh.raw * liveDamageMult(a, d.hit),
                 { cat: sh.cat, damageType: d.hit.dmg, attackType: d.hit.atk, rating: d.hit.rating },
-                spTarget.prot || {}, {});
+                stProt, {});
               spTarget.hp -= ms.shown * volley;
             });
             d.dots.concat(d.mechDots).forEach(function (dt) {
               if (dt.bs && !d.backstab) return;
               var cp = (GA.CAT_PROT || {})[dt.cat];
-              if (cp && Math.floor((spTarget.prot || {})[cp] || 0) >= (d.hit.rating || 100)) {
+              if (cp && Math.floor(stProt[cp] || 0) >= (d.hit.rating || 100)) {
                 ev(t, a.id, d.name + ' burn refused by ' + spTarget.sp.name, 'strip', d.id);
                 return;
               }
@@ -2783,7 +2848,7 @@
             ins.dots.forEach(function (dt) {
               if (dt.next > t) return;
               dt.next += dt.iv;
-              var md = GA.mitigate(dt.raw, dt.hit, ins.prot || {}, {});
+              var md = GA.mitigate(dt.raw, dt.hit, insProt(ins, t), {});
               ins.hp -= md.shown;
             });
             if (ins.hp <= 0 && !ins.done) {
@@ -2813,22 +2878,63 @@
           }
           // Damage. An AOE payload (a mine's blast) splashes EVERY standing enemy - the
           // owner's ruling, same as any other AOE device; single-target payloads (a turret's
-          // laser) take the carrier's aim, else whoever is standing.
-          var dmgTargets = [];
+          // laser) take the carrier's aim - which may be an ENEMY STRUCTURE (turret shoots
+          // turret, and the Grizzly's Mech: shred finally has its purpose) - else whoever
+          // is standing.
+          var dmgTargets = [], insTarget = null;
           if (sp.shots.length || sp.dots.length) {
-            if (ins.scopeAll) {
-              S.actors.forEach(function (x) {
-                if (!x.dead && x.team !== a.team) dmgTargets.push(x.id);
-              });
-            } else {
-              var tid = null;
-              var aimT = a.aim[ins.slot], av = aimT && S.byId[aimT];
-              if (av && !av.dead && av.team !== a.team) tid = aimT;
-              else S.actors.some(function (x) {
-                if (!x.dead && x.team !== a.team) { tid = x.id; return true; }
-                return false;
-              });
-              if (tid) dmgTargets.push(tid);
+            var aimT = a.aim[ins.slot];
+            if (typeof aimT === 'string' && aimT.indexOf('sp:') === 0) {
+              var pp = aimT.split(':');
+              var po = S.byId[pp[1]];
+              insTarget = (po && po.team !== a.team && (po.spawns || []).filter(function (x) {
+                return String(x.slot) === String(pp[2]) && !x.done;
+              })[0]) || null;
+              // a bot payload only ever acquires PAWNS: another turret or drone is fair
+              // game, a station/wall/mine is not a pawn and no AI can target it
+              if (insTarget && sp.src === 'bot' && insTarget.sp.src !== 'bot') {
+                insTarget = null;
+              }
+            }
+            if (!insTarget) {
+              if (ins.scopeAll) {
+                S.actors.forEach(function (x) {
+                  if (!x.dead && x.team !== a.team) dmgTargets.push(x.id);
+                });
+              } else {
+                var tid = null;
+                var av = aimT && S.byId[aimT];
+                if (av && !av.dead && av.team !== a.team) tid = aimT;
+                else S.actors.some(function (x) {
+                  if (!x.dead && x.team !== a.team) { tid = x.id; return true; }
+                  return false;
+                });
+                if (tid) dmgTargets.push(tid);
+              }
+            }
+          }
+          if (insTarget) {
+            shredIns(insTarget, sp.mechDebuffs, sp.name, t);
+            var itProt = insProt(insTarget, t);
+            sp.shots.forEach(function (sh) {
+              var mi = GA.mitigate(sh.raw,
+                { cat: sh.cat, damageType: sp.hit.dmg, attackType: sp.hit.atk,
+                  rating: sp.hit.rating }, itProt, {});
+              insTarget.hp -= mi.shown * volley;
+            });
+            sp.dots.forEach(function (dt) {
+              var cp2 = (GA.CAT_PROT || {})[dt.cat];
+              if (cp2 && Math.floor(itProt[cp2] || 0) >= (sp.hit.rating || 100)) return;
+              insTarget.dots = insTarget.dots || [];
+              insTarget.dots.push({ raw: dt.raw, iv: dt.iv, next: t + dt.iv,
+                until: t + dt.life,
+                hit: { cat: dt.cat, damageType: sp.hit.dmg, attackType: sp.hit.atk,
+                       rating: sp.hit.rating } });
+            });
+            if (insTarget.hp <= 0 && !insTarget.done) {
+              insTarget.done = true;
+              ev(t, pp[1], insTarget.sp.name + ' destroyed by ' + sp.name, 'death',
+                 insTarget.devId);
             }
           }
           dmgTargets.forEach(function (tid2) {

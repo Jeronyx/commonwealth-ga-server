@@ -170,22 +170,26 @@ def spawned_sources(did):
             for p in q("SELECT spawn_item_id si, spawn_bot_id sb, spawn_deployable_id sd FROM asm_data_set_projectiles WHERE device_projectile_id=? LIMIT 1", (m['proj'],)):
                 if p['sd']: deps.append(p['sd'])
                 if p['sb']: bots.append(p['sb'])
-                if p['si']: out.append((p['si'], iname(p['si']) or 'Impact', 0))
+                if p['si']: out.append((p['si'], iname(p['si']) or 'Impact', 0, 'item'))
         if m['dep']: deps.append(m['dep'])
         if m['bot']: bots.append(m['bot'])
+        # What BACKS the spawn matters to the run: a bot (turret, drone) is a PAWN - AI can
+        # acquire it, threat and taunt apply to it - while a deployable (station, wall, mine)
+        # is not a pawn at all, so turret/drone AI can never target it (owner-confirmed:
+        # not even Force Target redirects fire onto a station).
         for d in deps:
             for r in q("SELECT device_id dv, name_msg_translated n, health hp FROM asm_data_set_deployables WHERE deployable_id=? LIMIT 1", (d,)):
-                if r['dv']: out.append((r['dv'], (r['n'] or 'Deployed').replace('* ', ''), r['hp'] or 0))
+                if r['dv']: out.append((r['dv'], (r['n'] or 'Deployed').replace('* ', ''), r['hp'] or 0, 'dep'))
         for b in bots:
             hp = 0
             for r in q("SELECT hit_points hp FROM asm_data_set_bots WHERE bot_id=? LIMIT 1", (b,)):
                 hp = r['hp'] or 0
             for r in q("SELECT device_id dv FROM asm_data_set_bots_data_set_bot_devices WHERE bot_id=?", (b,)):
-                if r['dv']: out.append((r['dv'], iname(r['dv']) or 'Deployed', hp))
+                if r['dv']: out.append((r['dv'], iname(r['dv']) or 'Deployed', hp, 'bot'))
     seen = set(); ded = []
-    for d, lab, hp in out:
+    for d, lab, hp, src in out:
         if d in seen or d == did: continue
-        seen.add(d); ded.append((d, lab, hp))
+        seen.add(d); ded.append((d, lab, hp, src))
     return ded
 
 STATP = {354: ('Lifespan', 's'), 4: ('Cooldown', 's'), 279: ('Deploy', 's'),
@@ -553,7 +557,7 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
                      'chips': out[0]['zoom'], 'zoom': True, 'hit': out[0]['hit']})
     # Effects that live on a spawned entity (explosion deployable, turret/drone weapon).
     if recurse:
-        for sd, lab, shp in spawned_sources(did):
+        for sd, lab, shp, ssrc in spawned_sources(did):
             for sub in dev_modes(sd, False, recurse=False, is_spawn=True):
                 ch = dedup(sub['chips'])
                 # An "Equip:" chip here is the SPAWNED thing's own passive, not the carrier's.
@@ -585,7 +589,8 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
                 # Station's Removes Poison/Disease/Ignite) ride as strip groups the same way
                 # the carrier's own do.
                 rows.append({'kind': 'SPAWN', 'name': nm, 'power': sub.get('power'),
-                             'chips': ch, 'hit': sub.get('hit'), 'strip': strip_groups(sd)})
+                             'chips': ch, 'hit': sub.get('hit'), 'strip': strip_groups(sd),
+                             'src': ssrc})
         # a launcher whose effects all live on the spawned entity has an empty PRIMARY row
         rows = [r for r in rows if r['chips'] or r.get('power') is not None] or rows[:1]
     return rows
