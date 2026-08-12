@@ -124,6 +124,36 @@ only Aegis. Run it in the Combat tab rather than by hand.
 
 ---
 
+## 4b. Heal weapons — self-heal confirmed, but the target field is suspect
+
+**BioFeedback Beam (device 2906) heals its user on every landed shot, on both fire modes**, and
+pays even when the target is at full health. Confirmed in game, and the console has it right:
+
+| Mode | To the target | To the user |
+|---|---|---|
+| Healing Beam | Health **+52** (eg 9074, type 264 Hit) | Health **+18** (eg 18938, type **759 Successful Hit**) |
+| Concentrated Healin' | Health **+104** (eg 9076, type 264) | Health **+19.5** (eg 9079, type **759**, cat Regeneration) |
+
+The console labels these `Self: Heal +18.0` / `Self: Heal +19.5` and tags them egt 759 — the same
+group type that carries Super Healer's +50 and Death Medic's +60. Because it is a *Successful
+Hit* group it fires on landing the beam rather than on restoring missing HP, which is why it pays
+against a full-health target. Worth remembering when judging a beam medic's self-sufficiency: the
+primary is 70 HP per tick across both people, the secondary 123.5.
+
+**OPEN — what `target_type_value_id` actually gates.** Both modes are stored as **"Friend and
+Self"**, but in game **a healing weapon cannot target its own user** (project owner, 2026-08-05).
+The console resolves the mode to `tgt=friend`, so it currently behaves correctly — but by its own
+resolution rule, not because anything told it the constraint exists.
+
+So either the field means something narrower than it reads (compare `enemyself` on grenades, which
+means "can catch its thrower" via splash rather than "can be aimed at the thrower"), or it is
+simply wrong for heal weapons. Either way the value is unreliable, and `tgt` drives the
+ally/enemy side labels and the timeline's target selection — so if it is systematically wrong for
+this device class, other devices will share the error. Establish what the field gates before
+trusting it anywhere else.
+
+---
+
 ## 5. Coverage — what the console still does not model
 
 From `backlog.md` plus this session:
