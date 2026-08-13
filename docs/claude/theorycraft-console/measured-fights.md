@@ -166,6 +166,16 @@ Hit* group it fires on landing the beam rather than on restoring missing HP, whi
 against a full-health target. Worth remembering when judging a beam medic's self-sufficiency: the
 primary is 70 HP per tick across both people, the secondary 123.5.
 
+> **Timeline fix (2026-08-13, owner-reported):** the card had it right but the RUN dropped it —
+> an instant `Self:` heal chip fell through every branch of the simDevice dispatch. Per-hit self
+> heals (the BFB chips, plus the egt-759 skill heals: Super Healer's "+50 for each ally hit by a
+> Group Heal", Death Medic's per-target heal on Combat Offhands) now pay the firer once per body
+> the volley touches, full-health targets included. Verified: under fire, a BFB medic's death
+> moves 3.0s → 3.9s (PRI) / 4.1s (ALT), and a scheduled Healing Wave pays exactly +50 per ally
+> hit. Note the resolver scales the self chips through the normal layers (18 → 38.1 on an
+> HHHHHH roll with Output +75% and +21% heal mods) — if in-game floaters show a flat 18, that is
+> a calibration point to raise.
+
 **RESOLVED (2026-08-13) — what `target_type_value_id` gates.** The field maps 1:1 onto
 `TgDeviceFire.DeviceTargeterType` and is consumed by the native `UTgDeviceFire::IsValidTarget`
 (decompiled in ga-source), which gates **both aim validation and splash iteration** — it defines

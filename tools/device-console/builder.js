@@ -1304,9 +1304,15 @@
       }
       return { kind: 'all', targets: sim.actors.map(idOf), label: 'everyone' };
     }
+    // A hands weapon is AIMED, and you can never occupy your own crosshair trace - that is
+    // why a heal beam or nanite gun stored "Friend and Self" still cannot self-heal in game
+    // (measured 2026-08-05; the field only says who the effect may LAND on, see D7). So a
+    // single-target friend device held in the hands never offers its own user as a pick.
+    var notMe = function (x) { return x.id !== a.id; };
+    var friendPicks = HANDS[cat] ? mates.filter(notMe) : mates;
     var picks = isArm ? spawnPicks(mates)
-      : tgt === 'friend' ? mates
-        : tgt === 'friendonly' ? mates.filter(function (x) { return x.id !== a.id; })
+      : tgt === 'friend' ? friendPicks
+        : tgt === 'friendonly' ? mates.filter(notMe)
           : tgt === 'enemy' ? enemies.concat(spawnPicks(enemies, aimsViaBot))
             : tgt === 'enemyself' ? enemies.concat(spawnPicks(enemies, aimsViaBot))
               : sim.actors;
@@ -1756,6 +1762,16 @@
                pct: (x.calc === 68 || x.calc === 69), cat: 0, src: g.name, skill: x.skill };
     });
     d.selfTimed = [];
+    // On-hit SELF heals from skills riding this device, egt 759 "Successful Hit": Super
+    // Healer's "for each ally hit by a Group Heal, you gain 50 health", Death Medic's
+    // per-target heal on Combat Offhands. Same mechanic as a device's own instant "Self:"
+    // heal chips (collected below into the same list) - paid to the FIRER once per body the
+    // volley actually touches, whether or not that body was missing health. They are heals,
+    // not stat buffs, so the d.extra path above rightly never carried them (statName(51) is
+    // null) - but that meant the run dropped them entirely.
+    d.hitSelfHeals = (res.extra || []).filter(function (x) {
+      return x.egt === 759 && (x.prop === 51 || x.prop === 211) && x.calc === 67;
+    }).map(function (x) { return { v: x.v, sp: 0, src: x.skill }; });
     // A shield is a POOL plus the protection props it covers - prop 386 carries the pool, and
     // any protection chip sharing its category is what the pool stands behind.
     d.shields = [];
@@ -1835,6 +1851,12 @@
         else if (c.life > 0) d.selfTimed.push({ p: c.prop, name: GA.statName(c.prop) || 'self',
                                                 v: c.value, pct: c.isPct, cat: c.cat,
                                                 src: g.name, life: lifeOf(c) });
+        // An INSTANT "Self:" heal is the per-landed-shot payback (egt 759 Successful Hit) -
+        // the BioFeedback Beam pays its user +18/+19.5 on every shot that lands, on both fire
+        // modes, even against a full-health target (measured; measured-fights 4b). It fell
+        // through every branch above and was silently dropped from the run.
+        else d.hitSelfHeals = (d.hitSelfHeals || []).concat([{ v: c.value, sp: spOf(c),
+                                                               src: g.name }]);
       } else if (c.prop === 243) {
         // Power Pool. Seven devices move it - Power Stim, Power Station, Power Wave, Triage
         // Wave and the two backstab maces - and the run applied none of them. Backstab drains
@@ -2798,6 +2820,24 @@
               }
             });
           });
+          // Per-target-hit SELF heals (egt 759 Successful Hit): the firer is paid once per
+          // body this volley touched - allies for a group heal, enemies for a combat offhand,
+          // the beam's one target for BioFeedback - and a full-health target still pays,
+          // because the trigger is landing the hit, not restoring anything.
+          if ((d.hitSelfHeals || []).length && !a.dead) {
+            var hitBodies = 0;
+            tgts.forEach(function (tid) {
+              var v9 = S.byId[tid];
+              if (v9 && !v9.dead && String(tid) !== String(a.id)) hitBodies++;
+            });
+            if (hitBodies > 0) {
+              var perHit = 0;
+              d.hitSelfHeals.forEach(function (h9) {
+                perHit += liveLayer(h9.v, h9.sp, liveHealOutPct(a));
+              });
+              a.hp = Math.min(a.maxHP, a.hp + perHit * hitBodies * volley * liveHealMult(a));
+            }
+          }
           // raise any shield this device carries, on everyone it reaches
           if ((d.shields || []).length) {
             var shieldTo = (d.scope.kind === 'all' && d.scope.targets.length)

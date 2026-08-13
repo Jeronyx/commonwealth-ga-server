@@ -241,6 +241,8 @@ DMG_OK = {113, 115, 116, 897}     # 112 = "N/A" -> no damage-type axis
 # because of this field, but because the user can never occupy their own crosshair trace.
 # Self-inclusion only bites where the delivery can reach the user: splash and auras.
 TGT_MAP = {212: 'enemy', 213: 'friend', 214: 'self', 703: 'all', 846: 'enemyself', 884: 'friendonly'}
+# (device_id, stored mode name) -> displayed mode name. See the note at the rename site.
+MODERENAME = {(3946, 'Multi Healing Beam'): 'Concentrated Healing'}
 
 def hit_of(did, m):
     m = dict(m)            # q() hands back sqlite3.Row, which has no .get
@@ -360,6 +362,13 @@ def dev_modes(did, is_melee=False, recurse=True, is_spawn=False):
         power = round(pcr[0]['bv'], 2) if pcr else None
         mn = q("SELECT message msg FROM asm_data_set_msg_translations WHERE msg_id=?", (m['name_msg_id'],))
         mname = mn[0]['msg'] if mn else 'Fire'
+        # Same principle as PROPRENAME: the stored name is stale where the game says otherwise.
+        # Boost Beam's ALT is named "Multi Healing Beam" in the data, but its own tooltip reads
+        # "Alt-fire: +100% healing, increased cost" - a concentrated single-target heal exactly
+        # like BioFeedback's "Concentrated Healin'", and its mode has no radius. The name was
+        # copied from the Multi-Boost Beam (6004), whose alt genuinely arcs ("Arcs to 3
+        # targets") and keeps the name.
+        mname = MODERENAME.get((did, mname), mname)
         chips = []; zoomchips = []; bschips = []; blkchips = []; sensor = False; remove_pvs = set()
         sensordet = {}
         for eg in q("SELECT DISTINCT effect_group_id eg, effect_group_type_value_id t FROM asm_data_set_device_mode_effect_groups WHERE device_id=? AND device_mode_id=?", (did, m['mid'])):
