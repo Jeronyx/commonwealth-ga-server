@@ -232,7 +232,15 @@ DMG_OK = {113, 115, 116, 897}     # 112 = "N/A" -> no damage-type axis
 # carry type-264 HIT groups, but Sensor Boost is "Friend and Self" and buffs your team while the
 # Ballista is "Enemy". Reading only the group type projected Sensor Boost's damage buff onto the
 # person being shot, which was plainly wrong.
-TGT_MAP = {212: 'enemy', 213: 'friend', 214: 'self', 703: 'all', 846: 'enemyself', 884: 'friend'}
+# target_type_value_id -> who the fire mode may LAND ON (UTgDeviceFire::IsValidTarget gates
+# both aim validation and splash iteration with it). The value maps 1:1 onto the UC enum
+# DeviceTargeterType: 214->TGDTT_Self, 213->TGDTT_Friend (!IsEnemy - the user PASSES),
+# 212->TGDTT_Enemy, 846->TGDTT_Enemy_And_Self, 884->TGDTT_Friend_Only (the decompile
+# explicitly REJECTS the device's own user), 703->TGDTT_All.
+# A single-target beam stored "Friend and Self" (213) still cannot self-heal in game - not
+# because of this field, but because the user can never occupy their own crosshair trace.
+# Self-inclusion only bites where the delivery can reach the user: splash and auras.
+TGT_MAP = {212: 'enemy', 213: 'friend', 214: 'self', 703: 'all', 846: 'enemyself', 884: 'friendonly'}
 
 def hit_of(did, m):
     m = dict(m)            # q() hands back sqlite3.Row, which has no .get

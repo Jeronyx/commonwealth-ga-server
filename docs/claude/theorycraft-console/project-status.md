@@ -103,12 +103,15 @@ Each of these is verified against in-game numbers or decompiled UC, and implemen
 | Category scoping | `property_value_id` scopes a modifier to one effect category — why Eagle Eye reaches the Ballista debuff (cat 986) but not Killer Instinct's (cat 302). | §15.2 |
 | Modifier vs effect props | Never compose. Killer Instinct applies its own second debuff rather than modifying the weapon's. | §15.1 |
 | Shield pools | `asm_data_set_effect_groups.health`, scaled by 386 Effect Shield Modifier. Separate from the protection value; unrelated to the retired gear-durability mechanic. | §16.2 |
+| Shield absorption | The pool drains by the **post-mitigation slice**: `CalcProtection` submits `int(fValue−fNewValue)` per axis and the server matches the shield by the covered prop, so under a Range Shield the Ranged axis (immune) submits everything left after Physical. Calibrated against the measured two-shield fight (818 vs ~800 HP). | measured-fights §4 |
+| Live buffs join the skill layer | A support device's buff sums into the weapon's skill percentage layer at fire time (`GetBuffedProperty` — one layer), and the run's baseline excludes the whole active-device layer; the timeline owns every active contribution. Fixed 2026-08-13 (was double-counted as an extra multiplying layer). | measured-fights §4, backlog C9 |
 | Stacking / exclusion | `application_value_id` scoped by category. 20 mutually exclusive groups in this inventory. | §20 |
 | Effect-group type → target | Decides whether an effect lands on you or on what you hit. | §20.1 |
 | Conditional skills | Non-passive skill effects are excluded from the passive total and supplied by the ACTIVE layer. | §17 |
 | Sensors | Sensor Visibility Config decides *what* is revealed: 34 stealth, 35 through-walls, 36 low-health. | §16 note |
 | Cooldown | Prop **4**. Prop 203 is its modifier and never a device stat. | §16.1 |
 | Repair arms | Buff turrets/drones on three channels: repair (772), damage (935, Strongest Wins), deploy rate (1025). | — |
+| target_type_value_id | Maps 1:1 onto `DeviceTargeterType`, consumed by `UTgDeviceFire::IsValidTarget` for aim AND splash — who the effect may land on. 884 "Friend Only" rejects the caster: **the five medic Waves never buff their own user** (`friendonly` scope). Beams stored "Friend and Self" can't self-target for crosshair-geometry reasons, not data. `target_type_affect_value_id` = physicality gate (repair arms Mechanical, heals/Pain Gun Biological). | measured-fights §4b |
 
 ---
 
@@ -138,6 +141,7 @@ to derive or validate a rule.
 | **`effect_groups.health = 1` on melee** | The field means "shield pool" everywhere else. Excluded for now, unexplained. |
 | **Prop 243 = 18.0 on the three sniper rifles** | Consistent across all three, purpose unknown. |
 | **Killer Instinct self-shot leak — magnitude** | The leak itself is settled (see below). What is not: a flat −3.1 and ~31% of the debuff's magnitude both fit the single data point. |
+| **Raven item damage mods (C10)** | With the C9 layer fix, §2's measured 5.3s TTK fits the Raven's +12%/+9% rolled mods NOT applying — but C1 verified the same mod family to the unit on the Ballista, and the §4 shield fight fits them applying. One combat-log line decides it: unbuffed Raven shot at the §2 tank, 44 vs 36. |
 
 **Closed since this table was written:** Output Mod at hit time (C1 — it is its own multiplicative
 layer, matched to the unit); turret deploy units (C2); power regen during drain (C4 — confirmed
@@ -181,6 +185,13 @@ shields as pools, boosts on morale timing, the off-hand GCD, and power that runs
 - Payload rider debuffs (Lockdown's −30% slow beam) re-apply per volley and lapse when the
   fire stops; station auras (Medical heal + cures, Sensor +15% damage, Power Station's
   +5 Physical protection pulse + power) reach the whole side; instances outlive their owner.
+
+**Since then (2026-08-13):** shield absorption calibrated and the damage-layer double-count
+fixed (backlog C9, measured-fights §4); `target_type_value_id` semantics settled — the five
+medic Waves never buff their caster (D7, §4b); weapon-swap rotations run honestly — pin a hands
+weapon to a moment on the timeline and the later start is the swap, with everything already
+applied ticking on unaffected (D6). Open: C10, one combat-log line on whether the Raven's rolled
+damage mods apply.
 
 ## Outstanding — pick up here
 

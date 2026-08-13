@@ -91,29 +91,55 @@ category 770 outright) or to fight in the 40 of every 60 seconds it is down.
 
 ---
 
-## 4. NOT CALIBRATED — what the shield pool absorbs
+## 4. CALIBRATED (2026-08-13) — the pool absorbs the post-mitigation slice
 
 **Measured:** Assault burns a Range Shield, immediately pops a second Range Shield. Recon fires
 continuously with Range Stim. Recon runs out of power. **Assault left on ~800 HP** (≈2,625 taken).
 
-That single number does not reconcile with either hand model, and the two bracket it widely:
+**The console now reproduces this: 818 HP at the power-out moment** (rig per §1 with Range Stim,
+no Visual Scanner — §4's fight description names only the stim). Shields break at 2.1s and 4.2s,
+power dies at 7.6s. Run it in the Combat tab: rig on A firing the Raven with Range Stim on, the
+tank on B with two Range Shields on — the auto-scheduler pops the second the moment the first
+breaks.
 
-| Pool absorbs | Shield breaks | Predicted HP left | vs measured 800 |
-|---|---|---|---|
-| the post-Physical slice (~81/shot) | ~3.2s | ~2,760 | far too tanky |
-| the full raw hit (~226/shot) | ~1.2s | ~130 | far too fragile |
+**The drain rule was never actually free — it is fixed by code**, and it is the *slice*:
 
-The damage half of the model is validated to the second (§2), so the gap is in **shield
-absorption** — which has never been tested until now. 800 HP is the calibration point.
+- `TgEffectGroup.uc` `CalcProtection` (ga-source, :745) submits
+  `SubmitMitigationDamage(nProtectionType, int(fValue - fNewValue))` **per axis**, where
+  `fValue` is the running value entering that axis. Axes chain Category → DamageType →
+  AttackType, so by the Ranged axis the Physical cut has already happened.
+- Our server's `TgEffectManager__SubmitMitigationDamage` (the reimplemented native) drains only
+  a group with `m_nHealth > 0` **containing an effect on the submitted protection prop**. The
+  Range Shield's group carries prop 218 only, so the Physical axis's submission finds no shield
+  and falls through; the Ranged axis — immune under the shield, so its "reduction" is the whole
+  remaining value — is what drains the pool.
+- The pool is `GetEffectHealth` = `effect_groups.health` buffed by **prop 386 only**
+  (`TgEffectGroup.uc:266`): 2000 × 1.25 Shield Strength = **2500** here. The roll's Output Mod
+  does not touch it.
 
-**How to settle it cheaply:** fire at a target with Range Shield up and nothing else, and time
-how long until the shield breaks. ~1.2s means the pool absorbs raw; ~3.2s means it absorbs the
-post-mitigation slice. Everything downstream follows from that one number.
+**Why the old table bracketed instead of hitting:** the gap was never in shield absorption. The
+timeline had a damage-layer regression — an active support device's buff (Range Stim's +37.5%)
+was folded into the weapon's baseline resolve *and* re-applied at fire time as a fresh
+multiplicative layer, and the baseline half never expired with the stim. Buffs join the skill
+layer as a SUM (`GetBuffedProperty` registers them in one layer): raw during the stim is
+158.8 × (1 + .30 + .05 + .375) = 274, not 274 × 1.375. Fixed in `builder.js` (baseline excludes
+the whole active-device layer; live buffs applied as `raw × (100+sp+live)/(100+sp)`).
 
-**Do not hand-compute this.** The console already models shields as a pool plus the protections
-it covers, resolves `SubmitMitigationDamage`, and scales the pool by Shield Strength. Run the
-fight in the Combat tab instead — the hand arithmetic in this section is exactly why it is
-recorded as *not* calibrated.
+**For the cheap in-game timing test** (Range Shield up, §1 rig firing with stim): the calibrated
+model predicts the break at **~2.1s**, not the old table's 1.2/3.2 brackets.
+
+### NEW TENSION — the Raven's item damage mods vs §2's 5.3s
+
+With the layer regression fixed, the same §2 no-shield fight now computes **3.9–4.1s**, not the
+measured 5.3s. The difference is almost exactly the Raven's rolled item mods (DDDDDD: Damage
+Modifier - Range +12%, Effect Damage +9%), which the resolver multiplies in as the item layer —
+**Ballista-verified to the unit** (§0/C1: 585 × 1.75 × 1.21 matched). Drop them and §2 computes
+**5.2s ≈ measured**, but then this section's shield fight computes 1,999 HP left instead of 800.
+The two measured fights disagree about whether the SMG's +21% applies; the shield fight and the
+Ballista unit-match say yes, §2's stopwatch says no.
+
+**Decisive one-log-line test:** single unbuffed Raven shot at the §2 tank. Combat log shows
+**44** if the item mods apply (158.8 × 0.61 × 0.45), **36** if they don't (131.25 × 0.61 × 0.45).
 
 ### Second fight, set up but not yet run
 
@@ -140,17 +166,35 @@ Hit* group it fires on landing the beam rather than on restoring missing HP, whi
 against a full-health target. Worth remembering when judging a beam medic's self-sufficiency: the
 primary is 70 HP per tick across both people, the secondary 123.5.
 
-**OPEN — what `target_type_value_id` actually gates.** Both modes are stored as **"Friend and
-Self"**, but in game **a healing weapon cannot target its own user** (project owner, 2026-08-05).
-The console resolves the mode to `tgt=friend`, so it currently behaves correctly — but by its own
-resolution rule, not because anything told it the constraint exists.
+**RESOLVED (2026-08-13) — what `target_type_value_id` gates.** The field maps 1:1 onto
+`TgDeviceFire.DeviceTargeterType` and is consumed by the native `UTgDeviceFire::IsValidTarget`
+(decompiled in ga-source), which gates **both aim validation and splash iteration** — it defines
+who the fire mode may legally *land on*, not who you can put your crosshair on:
 
-So either the field means something narrower than it reads (compare `enemyself` on grenades, which
-means "can catch its thrower" via splash rather than "can be aimed at the thrower"), or it is
-simply wrong for heal weapons. Either way the value is unreliable, and `tgt` drives the
-ally/enemy side labels and the timeline's target selection — so if it is systematically wrong for
-this device class, other devices will share the error. Establish what the field gates before
-trusting it anywhere else.
+| value | enum | rule in the decompile |
+|---|---|---|
+| 212 Enemy | TGDTT_Enemy | `IsEnemy` |
+| 213 Friend and Self | TGDTT_Friend | `!IsEnemy` — **the user passes** |
+| 846 Enemy and Self | TGDTT_Enemy_And_Self | `IsEnemy \|\| IsSelfOrOwner` |
+| **884 Friend Only** | TGDTT_Friend_Only | `!IsEnemy`, **but the device's own user is explicitly rejected** |
+| 703 All / 214 Self | TGDTT_All / TGDTT_Self | always / never a valid aim target |
+
+So the heal beam's "Friend and Self" is not wrong: a single-target beam cannot self-heal because
+**you can never occupy your own crosshair trace** — geometry, not data. Self-inclusion only bites
+where the delivery can physically reach the user: splash and auras. That makes the field
+trustworthy for side labels, and it carries one real distinction the console previously erased:
+
+- **The five medic Waves (Healing, Frenzy, Protection, Power, Triage) are 884 — they buff every
+  nearby ally EXCEPT the caster.** A Healing Grenade (213) heals the thrower standing in its
+  blast; a Healing Wave does not heal the medic who cast it. gen2 now maps 884 → `friendonly`
+  and the Combat tab scopes it "allies, not self". *Cheap in-game check if wanted: cast Healing
+  Wave alone at missing HP — the code says your own HP does not move.*
+
+The companion field `target_type_affect_value_id` is the **physicality gate** (step 5 of
+`IsValidTarget`): 861 Mechanical on the three repair arms (why they weld only structures — the
+console's name-regex special case has a data-driven source), 860 Biological on the heal/buff
+family and on the Pain Gun (an 860+Enemy weapon is refused a mechanical target outright, upstream
+of the seeded structure protections).
 
 ---
 
@@ -170,4 +214,5 @@ From `backlog.md` plus this session:
   same assumption the burn/heal measurements already overturned once.
 - **Detection** (D2, D3) — Visibility Config bits are inferred, and reveal range/FOV live on the
   spawned entity so they never reach the device card.
-- **Shield absorption** — §4 above.
+- ~~**Shield absorption**~~ — calibrated, §4 above. The open shield question is now the Raven
+  item-mod tension (§4, C10 in the backlog).

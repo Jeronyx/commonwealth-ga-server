@@ -59,7 +59,7 @@ def ix_rows(did):
 # override the mode's target; power costs (242/322) are always the carrier's own drain.
 SELF_EGTS = {261, 262, 263, 265, 266, 283, 759, 1104}
 SELF_PFX = ('Self: ', 'Deployed: ', 'Equip: ', 'Zoom: ')
-TGT_SIDE = {'friend': 'allies', 'self': 'you', 'enemy': 'enemies', 'enemyself': 'enemies', 'all': 'target'}
+TGT_SIDE = {'friend': 'allies', 'friendonly': 'allies', 'self': 'you', 'enemy': 'enemies', 'enemyself': 'enemies', 'all': 'target'}
 def chip_arrow(c, tgt):
     """Benefit arrow for a card chip - the same benefit.classify() the reference page and
     the character sheet use. The arrow says whether the chip helps the DEVICE OWNER; the

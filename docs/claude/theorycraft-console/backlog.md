@@ -37,6 +37,8 @@ Ordered by how much they distort results.
 | ~~C6~~ | Regeneration vs Healing Grenade | **closed** | No conflict, and none was ever claimed — my note misattributed it. They sit in different categories (1341 Self Heal vs 772 Regeneration) and stack. Only the Nanite line contends with Healing Grenade. |
 | ~~C7~~ | Dual Daggers alt-fire | **closed** | Confirmed: the alt fire **is** the block, and it counts as the weapon's second mode. The console's off / primary / block cycle is correct. |
 | ~~C8~~ | Narrow-viewport layout | **closed** | Desktop-only by decision. Verified clean 980–1600px; phone breakpoints are out of scope. |
+| ~~C9~~ | Shield absorption calibration + live-buff double-count | **done 2026-08-13** | Two findings in one. (1) The pool drains by the **post-mitigation slice** — settled from code, not fitting: `CalcProtection` submits `int(fValue−fNewValue)` per axis and our `SubmitMitigationDamage` matches the shield by covered prop; pool = `effect_groups.health` × (1 + prop-386) only. (2) The timeline double-counted active support buffs (baseline + live re-apply, as a wrong extra layer, never expiring). Fixed in `builder.js`: run baseline excludes the whole active-device layer; live buffs sum into the chip's skill layer. Console now reproduces the measured two-Range-Shield fight: 818 vs ~800 HP. measured-fights §4. |
+| C10 | Do the Raven's rolled damage mods apply? | **blocked — needs one log line** | With the C9 fix, §2's no-shield fight computes 3.9–4.1s vs measured 5.3s; the gap ≈ the DDDDDD roll's +12% Range / +9% Effect Damage item layer, which C1 verified to the unit on the Ballista. Without it §2 matches (5.2s) but the §4 shield fight breaks (1,999 vs 800). Test: one unbuffed Raven shot at the §2 tank — log **44** (mods apply) vs **36** (don't). measured-fights §4. |
 
 ---
 
@@ -48,7 +50,9 @@ Ordered by how much they distort results.
 | D2 | Sensor Visibility Config bit meanings | open | 34 stealth / 35 through-walls / 36 low-health map to observed behaviour, but the encoding is unknown. |
 | D3 | Robotics Sensor reveal parameters | open | Detection lives on the spawned entity, so its range/FOV are not surfaced on the device. Same likely applies to other deployables. |
 | D4 | `effect_groups.health = 1` on melee weapons | open | Category 304 Slow. The field means "shield pool" elsewhere; here it means something else. Currently excluded, but unexplained. |
-| D6 | Effects linger across a weapon swap | open | Confirmed mechanic: a Nanite gun's effect keeps running after the medic swaps to another weapon. The console models "which weapon is out", not "what is still ticking from the last one". Relevant once F4 (DPS/TTK) exists, since it changes what a rotation actually delivers. |
+| ~~D6~~ | Effects linger across a weapon swap | **done 2026-08-13** | Two halves. Target-side state already persisted (HoTs/burns/buffs live on the TARGET's clocks), so the missing piece was expressing a swap at all: `stowOtherWeapons` now leaves a hands weapon on the board when it is pinned to a timeline schedule, and the run enforces hands exclusivity over TIME — the most recently drawn hands weapon is the one in hand; the later weapon's start is the swap moment. Verified: nanite pressed at 0, SMG drawn at 3s, the HoT ticks to its natural 10.1s expiry across the swap and the stowed nanite never re-fires. Remaining nuances (deliberate scope): A→B→A re-swap needs a second pin on A (only the first pinned moment counts as its start), and `time_to_equip_secs` (draw time) is not modelled. Unblocks F4. |
+| ~~D7~~ | What `target_type_value_id` gates | **done 2026-08-13** | Maps 1:1 onto `DeviceTargeterType`; consumed by native `UTgDeviceFire::IsValidTarget`, which gates aim validation AND splash iteration — "who the effect may land on". A beam stored "Friend and Self" can't self-heal purely because you can't occupy your own crosshair trace. Real distinction recovered: **884 Friend Only rejects the device's own user** — the five medic Waves buff allies but never their caster. gen2 maps 884 → `friendonly`; Combat tab scopes "allies, not self". `target_type_affect_value_id` is the physicality gate (repair arms 861 Mechanical, heal family + Pain Gun 860 Biological). measured-fights §4b. |
+| D8 | Derive the repair-arm gate from data | open | `deviceScope` picks repair-arm targets via a name regex (`/Repair Arm\|Nanite Repair/`); `target_type_affect_value_id = 861 Mechanical` is the data-driven source (D7). Swap when convenient; also lets the Pain Gun's mechanical refusal come from 860 instead of relying only on seeded protections. |
 | ~~D5~~ | Conditional buffs not yet modelled as third-party | **done** | Resolved with G1.4 — projection is by effect-group type, so anything aimed at another actor is carried automatically rather than device by device. |
 
 ---
@@ -60,7 +64,7 @@ Ordered by how much they distort results.
 | ~~F1~~ | Equipment / armour swapping | **done** | Delivered as the **TheoryCrafter** tab: a blank build where you pick a class, fill the eight slots from that class's pool, choose each item's mod roll, and spend skill points. Shares the resolver, armour panel, trees and My Player with the character view. Armour swapping still uses the preset configs rather than per-piece rolls. |
 | ~~F2~~ | Save / share a build | **done** | Builds are saved to localStorage in the same shape a live profile arrives in, so import is a copy rather than a translation. Export emits the profile-shaped JSON a sync would POST, gated on the account owning a character of that class. Sharing by URL is still open. |
 | ~~F3~~ | Compare two builds side by side | **done** | Delivered by the Combat tab rather than as a static comparison: any two saved builds can be put on opposite sides and resolved against each other. |
-| F4 | DPS / time-to-kill | open | Damage ÷ refire, bounded by power pool and cooldowns. C1 and C4 are now settled, so this is unblocked. Needs D6 (swap-lingering) to be honest about rotations. |
+| F4 | DPS / time-to-kill | open | Damage ÷ refire, bounded by power pool and cooldowns. Fully unblocked: C1, C4 and now D6 (swap rotations run honestly in the timeline) are all settled. |
 | F5 | Search / filter on the loadout page | open | 115 devices is a lot to scroll. Filter by class, category, or effect type. |
 | F6 | Mini skill trees on loadout cards | open | Built, then disabled for performance (~4,400 positioned nodes with inline images). Could return via sprite sheet or render-on-expand. |
 | F7 | Show *available* vs allocated skills per device | open | Tiles list allocated skills that affect them; showing the unallocated ones too would help planning. |
@@ -85,8 +89,9 @@ Ordered by how much they distort results.
 4. **G1.1–G1.3** — the mitigation stage. The single biggest step toward the point of all this.
 5. **G1.4/D5**, then **G1.5**.
 
-**The whole C section is now resolved** — C1 through C8. Nothing in the correctness list is
-blocked or unverified.
+**The C section is resolved through C9.** The one correctness item still open is **C10** — one
+in-game log line decides whether a weapon roll's damage mods apply on the Raven as they
+demonstrably do on the Ballista.
 
 **G1 is done** — G1.1 through G1.5. The console resolves a real fight between two saved builds.
 

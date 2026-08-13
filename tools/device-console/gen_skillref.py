@@ -253,7 +253,7 @@ def side_of(node, f, cls=None):
     HOSTILE = {'enemy', 'enemyself', 'all'}
     if tg and not (tg & HOSTILE):
         return 'allies'
-    if tg and not (tg & {'friend', 'self'}):
+    if tg and not (tg & {'friend', 'friendonly', 'self'}):
         return 'enemies'
     return 'target'
 

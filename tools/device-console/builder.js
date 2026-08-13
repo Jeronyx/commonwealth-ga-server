@@ -1198,13 +1198,21 @@
   // Melee, Ranged and Specialty share your hands - only one is ever out. Off-hands, boosts and
   // the jetpack are independent and can all run at once.
   var HANDS = { Melee: 1, Ranged: 1, Specialty: 1 };
+  // Has this slot been pinned to a moment on the timeline?
+  function hasSched(actorId, slot) {
+    var sc = (sim.sched[actorId] || {})[slot];
+    return !!(sc && (sc.from != null || (sc.uses && sc.uses.length)));
+  }
   function stowOtherWeapons(a, ctx, keepSlot) {
     var g = (ctx.charGear || [])[+keepSlot];
     if (!g || !HANDS[g.cat]) return;
     Object.keys(a.active).forEach(function (slot) {
       if (String(slot) === String(keepSlot)) return;
       var o = (ctx.charGear || [])[+slot];
-      if (o && HANDS[o.cat]) { delete a.active[slot]; delete a.aim[slot]; }
+      // A hands weapon PINNED to a schedule stays on the board: that is how a swap rotation
+      // is expressed (D6) - pin weapon A to its moment, switch weapon B on, pin it later.
+      // The run enforces that only one is actually in hand at any instant.
+      if (o && HANDS[o.cat] && !hasSched(a.id, slot)) { delete a.active[slot]; delete a.aim[slot]; }
     });
   }
 
@@ -1226,7 +1234,8 @@
       var spawnHit = (dev.modes || []).filter(function (m) {
         return m.kind === 'SPAWN' && m.hit && m.hit.tgt;
       })[0];
-      if (spawnHit && spawnHit.hit.tgt !== 'friend' && spawnHit.hit.tgt !== 'self') {
+      if (spawnHit && spawnHit.hit.tgt !== 'friend' && spawnHit.hit.tgt !== 'friendonly'
+          && spawnHit.hit.tgt !== 'self') {
         tgt = 'enemy';
       }
     }
@@ -1278,6 +1287,14 @@
     var isArm = /Repair Arm|Nanite Repair/.test((g && g.name) || '');
     if (splash) {
       if (tgt === 'friend') return { kind: 'all', targets: mates.map(idOf), label: 'all allies' };
+      // "Friend Only" (884 -> TGDTT_Friend_Only): IsValidTarget REJECTS the device's own user,
+      // so a wave centred on its caster reaches every ally BUT the caster. Distinct from
+      // "Friend and Self" (213), where the user passes and a splash catches them too.
+      if (tgt === 'friendonly') {
+        return { kind: 'all',
+                 targets: mates.filter(function (x) { return x.id !== a.id; }).map(idOf),
+                 label: 'allies, not self' };
+      }
       if (tgt === 'enemy') return { kind: 'all', targets: enemies.map(idOf), label: 'all enemies' };
       if (tgt === 'enemyself') {
         // "Enemy and Self" means a grenade CAN catch its thrower, and in game it does. For a
@@ -1289,9 +1306,10 @@
     }
     var picks = isArm ? spawnPicks(mates)
       : tgt === 'friend' ? mates
-        : tgt === 'enemy' ? enemies.concat(spawnPicks(enemies, aimsViaBot))
-          : tgt === 'enemyself' ? enemies.concat(spawnPicks(enemies, aimsViaBot))
-            : sim.actors;
+        : tgt === 'friendonly' ? mates.filter(function (x) { return x.id !== a.id; })
+          : tgt === 'enemy' ? enemies.concat(spawnPicks(enemies, aimsViaBot))
+            : tgt === 'enemyself' ? enemies.concat(spawnPicks(enemies, aimsViaBot))
+              : sim.actors;
     return { kind: 'single', picks: picks, targets: [], label: '' };
   }
   function idOf(x) { return x.id; }
@@ -1393,7 +1411,7 @@
         var hit = mm.hit || {};
         // resolve() rebuilds mode objects, so the strip table has to come off the model
         var strip = mm.strip || [];
-        if (hit.tgt === 'friend' || hit.tgt === 'self') return;   // not a weapon
+        if (hit.tgt === 'friend' || hit.tgt === 'friendonly' || hit.tgt === 'self') return;   // not a weapon
         var refire = null, power = m.power && m.power.value != null ? m.power.value : null;
         (m.chips || []).forEach(function (c) { if (c.prop === 53) refire = c.value; });
         (m.chips || []).forEach(function (c) {
@@ -1717,6 +1735,15 @@
     // for the buffed time while your own ran for the raw one - a Range Shield's protection
     // lapsing at 10.1s while its pool sat there until 14.1s was this.
     function lifeOf(c) { return c.lifeVal || c.life || 0; }
+    // The chip's resolved value is base x (1+item) x (1+sp/100), where sp is the summed
+    // skill/buff percentage layer (GetBuffedProperty sums them; layers multiply). A live buff
+    // landing mid-run joins that SUM - raw x (100+sp+live)/(100+sp) - it is not a fresh
+    // multiplicative layer. The chip's mods carry the decomposition, so recover sp here.
+    function spOf(c) {
+      var sp = 0;
+      (c.mods || []).forEach(function (x) { if (x.pct && x.layer !== 'item') sp += x.v; });
+      return sp;
+    }
     // Skills that fire BECAUSE this device is up - Aegis Armament's +25 Physical while a
     // shield holds (prop 155, calc 67, egt 1104 REACTIVE). simDevice only ever read chips, so
     // none of these reached the run: no reactive or conditional skill was being applied at all.
@@ -1795,15 +1822,15 @@
           // it was never recorded on the target, nothing could cleanse it either.
           if (c.iv > 0 && lifeOf(c) > 0) {
             d.dots.push({ raw: c.value, cat: c.cat, life: lifeOf(c), iv: c.iv, bs: !!c.bs,
-                          app: c.app || 0, appv: c.appv || 0 });
+                          app: c.app || 0, appv: c.appv || 0, sp: spOf(c) });
           } else {
-            d.shots.push({ raw: c.value, cat: c.cat, life: lifeOf(c), bs: !!c.bs });
+            d.shots.push({ raw: c.value, cat: c.cat, life: lifeOf(c), bs: !!c.bs, sp: spOf(c) });
           }
         }
         else if (onSelf) d.selfHeals = (d.selfHeals || []).concat([{ v: c.value, life: lifeOf(c),
-                                                                     iv: c.iv || 0 }]);
+                                                                     iv: c.iv || 0, sp: spOf(c) }]);
         else if (!c.self) d.heals.push({ v: c.value, life: lifeOf(c), iv: c.iv || 0,
-                                        sit: c.sit || 0, sv: c.sv || 0,
+                                        sit: c.sit || 0, sv: c.sv || 0, sp: spOf(c),
                                         cat: c.cat, app: c.app || 0, appv: c.appv || 0 });
         else if (c.life > 0) d.selfTimed.push({ p: c.prop, name: GA.statName(c.prop) || 'self',
                                                 v: c.value, pct: c.isPct, cat: c.cat,
@@ -1935,7 +1962,7 @@
     // rate whatever incidental timed effects they carry (the Agonizer's 4s debuffs do not slow
     // the gun down). A BioFeedback Beam has no timed effects at all - it is a per-tick heal - so
     // it also stays on refire.
-    var supportish = (d.hit.tgt === 'friend' || d.hit.tgt === 'self');
+    var supportish = (d.hit.tgt === 'friend' || d.hit.tgt === 'friendonly' || d.hit.tgt === 'self');
     if (supportish && d.maxLife > 0) {
       d.interval = Math.max(d.cooldown || 0, d.maxLife);
       d.cadence = (d.cooldown || 0) > d.maxLife
@@ -1962,29 +1989,18 @@
     var actors = sim.actors.map(function (a) {
       var ctx = actorCtx(a);
       if (!ctx) return null;
-      // Switching a boost on in the board makes statsFor fold its buffs straight into the
-      // actor - which is right for the static panel, but wrong here: the timeline decides WHEN
-      // a boost goes off. Leaving them in meant a Sensor Boost gated to 14s was still buffing
-      // the Scorpia from t=0, and the target died at 6.1s instead of 12.2s. So the baseline is
-      // built WITHOUT boosts, and the timeline applies them at the moment they fire.
-      // Boosts AND shields are owned by the run, not by the baseline. A shield's protection is
-      // only real while its pool holds - a Range Shield puts Ranged at 144 against attack rating
-      // 100, which is flat immunity, so leaving it in the baseline made the target invulnerable
-      // to ranged damage for ever and breaking the shield could not take it away.
-      var baseActive = {}, hasBoost = false;
-      Object.keys(a.active).forEach(function (slot) {
-        var g = (ctx.charGear || [])[+slot];
-        if (g && g.cat === 'Boost') { hasBoost = true; return; }
-        if (g && carriesShield(g.id, a.active[slot])) { hasBoost = true; return; }
-        baseActive[slot] = a.active[slot];
-      });
-      var baseCtx = ctx;
-      if (hasBoost) {
-        baseCtx = {};
-        Object.keys(ctx).forEach(function (k) { baseCtx[k] = ctx[k]; });
-        baseCtx.activeGear = baseActive;
-        baseCtx.activeOrder = Object.keys(baseActive);
-      }
+      // The ENTIRE active-device layer is owned by the run, not by the baseline. The timeline
+      // fires every switched-on device at a moment and applies its contribution live - a stim's
+      // buff when it fires, a shield's protection while its pool holds, a boost on morale
+      // timing, conditional skills while their gating device is up (d.extra). Folding any of it
+      // into the baseline as well double-counts it: a Range Stim's +37.5% sat in the weapon's
+      // resolved raw AND landed again as a live effect at t=0, multiplying twice - and the
+      // baseline half never expired with the stim. Equip passives are unaffected: they come
+      // from CARRYING the device (equipBuffs reads charGear), not from it being switched on.
+      var baseCtx = {};
+      Object.keys(ctx).forEach(function (k) { baseCtx[k] = ctx[k]; });
+      baseCtx.activeGear = {};
+      baseCtx.activeOrder = [];
       var col = statsFor(baseCtx);
       var dv = deriveTotals(col.stats);
       var devs = Object.keys(a.active).map(function (slot) { return simDevice(a, ctx, slot, col); })
@@ -2005,7 +2021,7 @@
         var L = 0;
         (proj[d.slot] || []).forEach(function (f) { if (f.life > L) L = f.life; });
         d.maxLife = L;
-        var supportish = (d.hit.tgt === 'friend' || d.hit.tgt === 'self');
+        var supportish = (d.hit.tgt === 'friend' || d.hit.tgt === 'friendonly' || d.hit.tgt === 'self');
         if (supportish && L > 0) {
           d.interval = Math.max(d.cooldown || 0, L);
           d.cadence = (d.cooldown || 0) > L
@@ -2170,14 +2186,31 @@
     liveNow(act).forEach(function (f) { if (f.p === 316) pct += f.v; });
     return pct;
   }
-  function liveDamageMult(act, hit) {
+  // Live percentage buffs on the ATTACKER that reach this hit. They join the resolved chip's
+  // own skill/buff layer as a SUM - GetBuffedProperty registers them all in one layer - so the
+  // caller applies raw x (100 + sp + live) / (100 + sp), never a fresh multiplier on top. The
+  // baseline resolve excludes active-device buffs (see buildSim), so nothing counts twice.
+  function liveDamagePct(act, hit) {
     var want = DMG_MOD_BY_ATK[hit && hit.atk] || 0;
     var pct = 0;
     liveNow(act).forEach(function (f) {
       if (!f.pct) return;
       if (f.p === 65 || (want && f.p === want)) pct += f.v;
     });
-    return 1 + pct / 100;
+    return pct;
+  }
+  // outgoing-heal counterpart: prop 330 Effect Healing Modifier
+  function liveHealOutPct(act) {
+    var pct = 0;
+    liveNow(act).forEach(function (f) {
+      if (f.pct && f.p === 330) pct += f.v;
+    });
+    return pct;
+  }
+  function liveLayer(raw, sp, livePct) {
+    if (!livePct) return raw;
+    var base = 100 + (sp || 0);
+    return raw * (base + livePct) / base;
   }
 
   // Every point a protection axis takes off is submitted to whatever shield stands behind that
@@ -2321,6 +2354,24 @@
           var interval = d.interval || 0;
           if (!interval) return;                       // nothing that repeats
           var sc = a.sched[d.slot];
+          // Hands exclusivity over TIME (D6): several hand weapons may sit on the board when
+          // pinned to schedules, but only the one most recently drawn is in hand - the later
+          // weapon's start IS the swap moment, and the earlier one stops firing there. What it
+          // already applied (a nanite HoT, a burn) keeps ticking on the target regardless:
+          // those live on the target's own clocks, exactly as measured in game.
+          if (HANDS[d.cat]) {
+            var curHands = null, curStart = -1;
+            a.devs.forEach(function (h) {
+              if (!HANDS[h.cat]) return;
+              var hsc = a.sched[h.slot] || {};
+              var s = (hsc.uses && hsc.uses.length) ? hsc.uses[0]
+                    : (hsc.from != null ? hsc.from : 0);
+              if (s <= t + 1e-9 && s >= curStart) { curHands = h.slot; curStart = s; }
+            });
+            if (curHands != null && String(curHands) !== String(d.slot)) {
+              d.ready = Math.max(d.ready, t); return;
+            }
+          }
           // a start time for a continuous weapon, discrete presses for anything else
           var manual = sc && sc.uses && sc.uses.length && d.refire <= 0;
           if (sc && sc.uses && sc.uses.length && d.refire > 0
@@ -2533,7 +2584,7 @@
               // only the opening shot can be capped; by the second the target is no longer full.
               var hitInfo = { cat: sh.cat, damageType: d.hit.dmg, attackType: d.hit.atk,
                               rating: d.hit.rating };
-              var rawOne = sh.raw * liveDamageMult(a, d.hit) + extra;
+              var rawOne = liveLayer(sh.raw, sh.sp, liveDamagePct(a, d.hit)) + extra;
               var atFull = v.hp >= v.maxHP;
               var xt = liveExtraTaken(v);
               var m = GA.mitigate(rawOne, hitInfo, protNow(v),
@@ -2614,7 +2665,7 @@
             var stProt = insProt(spTarget, t);
             d.shots.concat(d.mechShots).forEach(function (sh) {
               if (sh.bs && !d.backstab) return;
-              var ms = GA.mitigate(sh.raw * liveDamageMult(a, d.hit),
+              var ms = GA.mitigate(liveLayer(sh.raw, sh.sp, liveDamagePct(a, d.hit)),
                 { cat: sh.cat, damageType: d.hit.dmg, attackType: d.hit.atk, rating: d.hit.rating },
                 stProt, {});
               spTarget.hp -= ms.shown * volley;
@@ -2686,7 +2737,8 @@
               a.hots.push({ src: d.name, devId: d.id, raw: h.v, iv: h.iv || h.life,
                             next: t + (h.iv || h.life), until: t + h.life });
             } else {
-              a.hp = Math.min(a.maxHP, a.hp + h.v * volley * liveHealMult(a));
+              a.hp = Math.min(a.maxHP, a.hp
+                + liveLayer(h.v, h.sp, liveHealOutPct(a)) * volley * liveHealMult(a));
             }
           });
           // One hit, one evaluation: the health test is taken BEFORE any of this device's
@@ -2723,7 +2775,8 @@
                               next: t + (h.iv || h.life), until: t + h.life,
                               cat: h.cat, app: h.app, appv: h.appv, life: h.life, at: t });
               } else {
-                v.hp = Math.min(v.maxHP, v.hp + h.v * volley * liveHealMult(v));
+                v.hp = Math.min(v.maxHP, v.hp
+                  + liveLayer(h.v, h.sp, liveHealOutPct(a)) * volley * liveHealMult(v));
               }
             });
           });
