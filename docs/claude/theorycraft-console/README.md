@@ -18,6 +18,7 @@ Everything from the `theorycraft-console` branch lives in this folder. Two relat
 | `backlog.md` | The to-do list, with stable ids. |
 | `damage-pipeline.md` | The reverse-engineering write-up. |
 | `rules-and-provenance.md` | Data vs code vs provenance. The drift-hazard list. |
+| `tooltip-audit.md` | 2026-08-13 full sweep: every device's tooltip vs what the console models, with per-device verdicts. |
 | `device-console.html` | The generated console (~3 MB, self-contained). **Generated — do not hand-edit.** |
 | `assets/device-icons/` | 115 device images, keyed by `device_id`. |
 | `issues/` | Write-ups raised with the wider project. |

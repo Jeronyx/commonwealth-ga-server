@@ -1732,6 +1732,7 @@
       if (c.prop === 53) d.refire = c.value;
       if (c.prop === 4) d.cooldown = c.value;
       if (c.prop === 150) d.persist = c.value;        // Persist Time - how long a boost lasts
+      if (c.prop === 151) d.pulse = c.value;          // Persist Pulse - the field re-fires this often
       if (c.prop === 318) d.morale = c.value;         // Required Points To Fire
       if (c.prop === 279) d.deployTime = c.value;     // build time of whatever it puts down
       if (c.prop === 354) d.lifespan = c.value;       // how long the spawned thing lives
@@ -2000,8 +2001,18 @@
     // at all: Healing Boost never healed, Oathbreaker never landed its damage or heal debuff.
     if (!d.interval && d.persist > 0) {
       d.once = true;
-      d.interval = d.persist;
-      d.cadence = 'once (' + d.persist + 's)';
+      // Persist Pulse (prop 151): the persist window is a FIELD that re-fires the mode this
+      // often - Oathbreaker and Super Smash, both 1s. Their damage, debuffs, knockback and
+      // per-body self heals pay on every pulse, and a 2s debuff pulsed every 1s is
+      // permanently refreshed on anyone standing in the zone (owner-confirmed live
+      // behaviour). Boosts without a pulse apply once; their timed buffs cover the window.
+      if (d.pulse > 0) {
+        d.interval = d.pulse;
+        d.cadence = 'pulses every ' + d.pulse + 's for ' + Math.round(d.persist) + 's';
+      } else {
+        d.interval = d.persist;
+        d.cadence = 'once (' + d.persist + 's)';
+      }
     }
     return d;
   }
@@ -2394,11 +2405,21 @@
               d.ready = Math.max(d.ready, t); return;
             }
           }
+          // A pulsing boost (Persist Pulse, prop 151) re-fires ITSELF every pulse once
+          // activated, until its persist window lapses. Those later firings are the field
+          // acting, not presses and not fresh activations, so they bypass the press-matching
+          // and the once/morale gates below.
+          var pulsing = d.once && d.pulse > 0 && d.firedOnce && d.pulseUntil != null;
+          if (pulsing) {
+            if (t + 1e-9 > d.pulseUntil) return;         // field lapsed
+            if (t + 1e-9 < d.ready) return;              // next pulse not due yet
+          }
           // a start time for a continuous weapon, discrete presses for anything else
-          var manual = sc && sc.uses && sc.uses.length && d.refire <= 0;
+          var manual = !pulsing && sc && sc.uses && sc.uses.length && d.refire <= 0;
           if (sc && sc.uses && sc.uses.length && d.refire > 0
               && t + 1e-9 < sc.uses[0]) { d.ready = Math.max(d.ready, t); return; }
-          if (manual) {
+          if (pulsing) { /* due: fall through to the volley */ }
+          else if (manual) {
             // Where it was placed is when you PRESS it, not the only instant it may go off.
             // Matching a single 0.1s window meant a press that collided with the global off-hand
             // cooldown was silently dropped - put Vulture Vision just after Bionics and it never
@@ -2415,7 +2436,7 @@
             if (sc && sc.from != null && t + 1e-9 < sc.from) { d.ready = Math.max(d.ready, t); return; }
             if (t + 1e-9 < d.ready) return;
           }
-          if (d.once) {
+          if (d.once && !pulsing) {
             // Boosts cost morale (prop 318 "Required Points To Fire"), not a cooldown. Nobody
             // opens a fight with one - you press it when you have banked enough. How fast morale
             // accrues is NOT in any data we can read: props 326/398 are unused in the asset DB,
@@ -2545,8 +2566,11 @@
           }
           if (!d.firedOnce) {
             ev(t, a.id, d.name + ' fires'
-               + (/every/.test(d.cadence || '') ? ', ' + d.cadence : ''), 'fire', d.id, d.slot);
+               + (/every|pulses/.test(d.cadence || '') ? ', ' + d.cadence : ''), 'fire', d.id, d.slot);
             d.firedOnce = true;
+            // arm the pulse window: first pulse is this activation, the last one sits at
+            // start + persist - pulse (10 one-second pulses across a 10s field)
+            if (d.once && d.pulse > 0) d.pulseUntil = t + (d.persist || 0) - d.pulse;
           }
           // put the payload down. One live instance per slot - redeploying replaces it, the
           // way placing a new turret moves the old one - and the instance then runs on its

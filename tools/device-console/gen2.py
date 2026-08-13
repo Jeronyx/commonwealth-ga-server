@@ -196,6 +196,11 @@ STATP = {354: ('Lifespan', 's'), 4: ('Cooldown', 's'), 279: ('Deploy', 's'),
          230: ('Max out', ''), 53: ('Refire', 's'), 259: ('Scope', 'x'),
          # 150 Persist Time is how long a deployed thing lives; 5 is its placement range
          150: ('Duration', 's'), 5: ('Range', ''),
+         # 151 Persist Pulse: the persist window RE-FIRES the mode this often. Only two
+         # devices carry it - Oathbreaker and Super Smash Boost, both 1.0s - making them
+         # 10s fields that pulse damage/debuffs/knockback every second, which is what their
+         # "for 10s" tooltips mean (owner-confirmed against live behaviour 2026-08-13).
+         151: ('Pulse', 's'),
          # player-facing device numbers that were never surfaced
          6: ('Radius', ''),          # AoE blast radius
          153: ('Eff Range', ''),     # falloff distance
